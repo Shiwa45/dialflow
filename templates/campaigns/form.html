@@ -1,0 +1,219 @@
+{% extends "base/base.html" %}
+{% block title %}{{ title }} — DialFlow Pro{% endblock %}
+{% block nav_campaigns %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">{{ title }}</div>
+    {% if campaign %}<div class="page-subtitle">{{ campaign.name }}</div>{% endif %}
+  </div>
+  <a href="{% url 'campaigns:list' %}" class="btn btn-secondary">
+    <i class="fa-solid fa-arrow-left"></i> Back
+  </a>
+</div>
+
+<form method="post" novalidate>
+{% csrf_token %}
+
+<!-- Tab navigation -->
+<div style="display:flex;gap:2px;margin-bottom:20px;border-bottom:1px solid var(--color-border)">
+  {% for tab in tabs %}<button type="button" class="tab-btn {% if forloop.first %}active{% endif %}"
+    data-tab="{{ forloop.counter }}">{{ tab }}</button>{% endfor %}
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 340px;gap:20px">
+  <div>
+    <!-- Tab 1: Basic -->
+    <div class="tab-panel active" data-panel="1">
+      <div class="card mb-4"><div class="card-header"><span class="card-title">Identity</span></div>
+      <div class="card-body">
+        <div class="form-group">
+          <label class="form-label">Campaign Name *</label>
+          {{ form.name }}{% if form.name.errors %}<div class="form-error">{{ form.name.errors.0 }}</div>{% endif %}
+        </div>
+        <div class="form-group">
+          <label class="form-label">Description</label>
+          {{ form.description }}
+        </div>
+      </div></div>
+
+      <div class="card"><div class="card-header"><span class="card-title">Telephony</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group"><label class="form-label">Asterisk Server *</label>{{ form.asterisk_server }}</div>
+          <div class="form-group"><label class="form-label">Carrier</label>{{ form.carrier }}</div>
+          <div class="form-group"><label class="form-label">Caller ID</label>{{ form.caller_id }}</div>
+          <div class="form-group"><label class="form-label">Dial Prefix</label>{{ form.dial_prefix }}</div>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- Tab 2: Dial Settings -->
+    <div class="tab-panel" data-panel="2">
+      <div class="card mb-4"><div class="card-header"><span class="card-title">Dial Settings</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group"><label class="form-label">Dial Mode</label>{{ form.dial_mode }}</div>
+          <div class="form-group"><label class="form-label">Dial Timeout (sec)</label>{{ form.dial_timeout }}</div>
+          <div class="form-group"><label class="form-label">Dial Ratio</label>{{ form.dial_ratio }}</div>
+          <div class="form-group"><label class="form-label">Target Abandon Rate %</label>{{ form.abandon_rate }}</div>
+          <div class="form-group"><label class="form-label">Min Ratio</label>{{ form.min_dial_ratio }}</div>
+          <div class="form-group"><label class="form-label">Max Ratio</label>{{ form.max_dial_ratio }}</div>
+        </div>
+      </div></div>
+
+      <div class="card mb-4"><div class="card-header"><span class="card-title">Hopper</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div class="form-group"><label class="form-label">Hopper Level</label>{{ form.hopper_level }}</div>
+          <div class="form-group"><label class="form-label">Hopper Size</label>{{ form.hopper_size }}</div>
+          <div class="form-group"><label class="form-label">Lead Order</label>{{ form.lead_order }}</div>
+        </div>
+      </div></div>
+
+      <div class="card"><div class="card-header"><span class="card-title">AMD</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label" style="display:flex;align-items:center;gap:8px">
+              {{ form.amd_enabled }} Enable AMD
+            </label>
+          </div>
+          <div class="form-group"><label class="form-label">AMD Action</label>{{ form.amd_action }}</div>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- Tab 3: Call hours & Wrapup -->
+    <div class="tab-panel" data-panel="3">
+      <div class="card mb-4"><div class="card-header"><span class="card-title">Call Hours</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group"><label class="form-label">Start Time</label>{{ form.call_hour_start }}</div>
+          <div class="form-group"><label class="form-label">End Time</label>{{ form.call_hour_end }}</div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label class="form-label" style="display:flex;align-items:center;gap:8px">
+              {{ form.respect_timezone }} Respect lead timezone
+            </label>
+          </div>
+        </div>
+      </div></div>
+
+      <div class="card mb-4"><div class="card-header"><span class="card-title">Recording</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label" style="display:flex;align-items:center;gap:8px">
+              {{ form.enable_recording }} Enable Call Recording
+            </label>
+          </div>
+          <div class="form-group"><label class="form-label">Recording Mode</label>{{ form.recording_mode }}</div>
+        </div>
+      </div></div>
+
+      <div class="card"><div class="card-header"><span class="card-title">Auto Wrapup</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group">
+            <label class="form-label" style="display:flex;align-items:center;gap:8px">
+              {{ form.auto_wrapup_enabled }} Enable Auto Wrapup
+            </label>
+            <div class="form-help">Automatically dispose calls after timeout</div>
+          </div>
+          <div class="form-group"><label class="form-label">Wrapup Timeout (sec)</label>{{ form.wrapup_timeout }}</div>
+          <div class="form-group"><label class="form-label">Auto Timeout (sec)</label>{{ form.auto_wrapup_timeout }}</div>
+          <div class="form-group"><label class="form-label">Auto Disposition</label>{{ form.auto_wrapup_disposition }}</div>
+        </div>
+      </div></div>
+    </div>
+
+    <!-- Tab 4: Leads & DNC -->
+    <div class="tab-panel" data-panel="4">
+      <div class="card mb-4"><div class="card-header"><span class="card-title">Attempt Limits</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="form-group"><label class="form-label">Max Attempts</label>{{ form.max_attempts }}</div>
+          <div class="form-group"><label class="form-label">Retry Delay (min)</label>{{ form.retry_delay_minutes }}</div>
+        </div>
+      </div></div>
+
+      <div class="card mb-4"><div class="card-header"><span class="card-title">DNC Settings</span></div>
+      <div class="card-body">
+        <label class="form-label" style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          {{ form.use_system_dnc }} Use system-wide DNC list
+        </label>
+        <label class="form-label" style="display:flex;align-items:center;gap:8px">
+          {{ form.use_campaign_dnc }} Use campaign-specific DNC list
+        </label>
+      </div></div>
+
+      <div class="card"><div class="card-header"><span class="card-title">Dispositions</span></div>
+      <div class="card-body">
+        <div class="form-help mb-2">Select which dispositions agents can choose for this campaign.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          {{ form.dispositions }}
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <!-- Sidebar actions -->
+  <div>
+    <div class="card" style="position:sticky;top:68px">
+      <div class="card-header"><span class="card-title">Save</span></div>
+      <div class="card-body">
+        <button type="submit" class="btn btn-primary w-full mb-4">
+          <i class="fa-solid fa-floppy-disk"></i> Save Campaign
+        </button>
+        {% if campaign %}
+        <a href="{% url 'campaigns:detail' campaign.pk %}" class="btn btn-secondary w-full">
+          View Details
+        </a>
+        {% endif %}
+        {% if form.errors %}
+        <div class="toast toast-error mt-4">
+          <i class="fa-solid fa-circle-xmark"></i>
+          Please fix the errors above.
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+</form>
+
+<script>
+const tabs  = document.querySelectorAll('.tab-btn');
+const panels= document.querySelectorAll('.tab-panel');
+
+// Provide tab list to template from JS since Django template tag isn't ideal for it
+// Activate first tab panel on load
+if (!document.querySelector('.tab-panel.active')) {
+  const first = document.querySelector('.tab-panel');
+  if (first) first.classList.add('active');
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelector(`.tab-panel[data-panel="${btn.dataset.tab}"]`)?.classList.add('active');
+  });
+});
+</script>
+
+<style>
+.tab-btn {
+  padding: 8px 16px; background: none; border: none; border-bottom: 2px solid transparent;
+  font-size: 13.5px; font-weight: 500; color: var(--color-text-3); cursor: pointer;
+  transition: all 150ms;
+}
+.tab-btn:hover { color: var(--color-text-1); }
+.tab-btn.active { color: var(--color-accent); border-bottom-color: var(--color-accent); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+</style>
+{% endblock %}

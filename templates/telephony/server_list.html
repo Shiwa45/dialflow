@@ -1,0 +1,128 @@
+{% extends "base/base.html" %}
+{% block title %}Telephony — DialFlow Pro{% endblock %}
+{% block nav_telephony %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Telephony</div>
+    <div class="page-subtitle">Asterisk servers, carriers, and phone extensions</div>
+  </div>
+</div>
+
+<!-- ARI status strip -->
+<div class="card mb-4" style="padding:14px 18px">
+  <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    {% for server in servers %}
+    <div style="display:flex;align-items:center;gap:8px">
+      <span id="srv-dot-{{ server.pk }}" style="width:10px;height:10px;border-radius:50%;
+        background:{% if server.connection_status == 'connected' %}var(--color-success)
+        {% elif server.connection_status == 'error' %}var(--color-danger)
+        {% else %}var(--color-offline){% endif %}"></span>
+      <span style="font-size:13.5px;font-weight:500">{{ server.name }}</span>
+      <span class="text-sm text-muted">{{ server.server_ip }}</span>
+      <span class="badge badge-{{ server.connection_status }}" style="font-size:10px">
+        {{ server.get_connection_status_display }}
+      </span>
+      {% if server.last_connected %}
+      <span class="text-sm text-muted">
+        Last connected: {{ server.last_connected|date:"H:i" }}
+      </span>
+      {% endif %}
+    </div>
+    {% empty %}
+    <span class="text-sm text-muted">No Asterisk servers configured.</span>
+    {% endfor %}
+    <a href="/admin/telephony/asteriskserver/" class="btn btn-secondary btn-sm" style="margin-left:auto">
+      <i class="fa-solid fa-pen"></i> Edit in Admin
+    </a>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+  <!-- Phones -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Phone Extensions</span>
+      <a href="/admin/telephony/phone/add/" class="btn btn-secondary btn-sm">
+        <i class="fa-solid fa-plus"></i> Add
+      </a>
+    </div>
+    <div class="table-wrap">
+      <table class="table table-sm">
+        <thead>
+          <tr><th>Ext</th><th>Name</th><th>Type</th><th>Agent</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          {% for phone in phones %}
+          <tr>
+            <td class="text-mono" style="font-weight:500">{{ phone.extension }}</td>
+            <td>{{ phone.name }}</td>
+            <td>
+              <span class="badge" style="{% if phone.phone_type == 'webrtc' %}background:#EFF6FF;color:#1E40AF{% else %}background:#F9FAFB;color:#6B7280{% endif %}">
+                {{ phone.get_phone_type_display }}
+              </span>
+            </td>
+            <td class="text-sm">{{ phone.user.username|default:"—" }}</td>
+            <td>
+              <span class="badge {% if phone.is_active %}badge-active{% else %}badge-offline{% endif %}">
+                {% if phone.is_active %}Active{% else %}Inactive{% endif %}
+              </span>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" style="text-align:center;padding:24px;color:var(--color-text-3)">
+            No extensions. Run <code>python manage.py setup_initial_data</code> to create one.
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Carriers -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Carriers / Trunks</span>
+      <a href="/admin/telephony/carrier/add/" class="btn btn-secondary btn-sm">
+        <i class="fa-solid fa-plus"></i> Add
+      </a>
+    </div>
+    <div class="table-wrap">
+      <table class="table table-sm">
+        <thead>
+          <tr><th>Name</th><th>Host</th><th>Protocol</th><th>Max Ch.</th></tr>
+        </thead>
+        <tbody>
+          {% for carrier in carriers %}
+          <tr>
+            <td style="font-weight:500">{{ carrier.name }}</td>
+            <td class="text-mono text-sm">{{ carrier.host }}</td>
+            <td class="text-sm">{{ carrier.protocol|upper }}</td>
+            <td class="text-mono">{{ carrier.max_channels }}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="4" style="text-align:center;padding:24px;color:var(--color-text-3)">
+            No carriers configured.
+          </td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+// Poll ARI status every 10s
+setInterval(async () => {
+  try {
+    const data = await DF.get('{% url "telephony:ari_status" %}');
+    (data.servers || []).forEach(s => {
+      const dot = document.getElementById(`srv-dot-${s.id}`);
+      // We don't have IDs in the API — the dot update is approximate
+    });
+  } catch(e) {}
+}, 10000);
+</script>
+{% endblock %}

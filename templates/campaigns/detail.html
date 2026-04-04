@@ -1,0 +1,247 @@
+{% extends "base/base.html" %}
+{% block title %}{{ campaign.name }} — DialFlow Pro{% endblock %}
+{% block nav_campaigns %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">{{ campaign.name }}</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+      <span class="badge badge-{{ campaign.status }}" id="campStatusBadge">{{ campaign.get_status_display }}</span>
+      <span class="text-sm text-muted">{{ campaign.get_dial_mode_display }}</span>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px">
+    {% if campaign.status != 'active' %}
+    <button class="btn btn-success" onclick="ctrl('start')"><i class="fa-solid fa-play"></i> Start</button>
+    {% endif %}
+    {% if campaign.status == 'active' %}
+    <button class="btn btn-secondary" onclick="ctrl('pause')"><i class="fa-solid fa-pause"></i> Pause</button>
+    {% endif %}
+    {% if campaign.status != 'stopped' %}
+    <button class="btn btn-danger" onclick="ctrl('stop')"><i class="fa-solid fa-stop"></i> Stop</button>
+    {% endif %}
+    <a href="{% url 'campaigns:agents' campaign.pk %}" class="btn btn-secondary">
+      <i class="fa-solid fa-users"></i> Agents
+    </a>
+    <button class="btn btn-secondary" onclick="refillHopper()">
+      <i class="fa-solid fa-rotate"></i> Refill
+    </button>
+    <a href="{% url 'campaigns:edit' campaign.pk %}" class="btn btn-secondary">
+      <i class="fa-solid fa-pen"></i> Settings
+    </a>
+  </div>
+</div>
+
+<!-- Live stats -->
+<div class="stat-grid stat-grid-4 mb-4">
+  <div class="stat-card">
+    <div class="stat-label">Calls Today</div>
+    <div class="stat-value" id="stCalls">{{ campaign.stat_calls_today }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Answered</div>
+    <div class="stat-value" id="stAnswered">{{ campaign.stat_answered_today }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Abandon Rate</div>
+    <div class="stat-value" id="stAbandon">{{ campaign.stat_abandon_rate|floatformat:1 }}%</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Active Agents</div>
+    <div class="stat-value" id="stAgents">{{ campaign.stat_agents_active }}</div>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 320px;gap:20px">
+
+  <!-- LEFT -->
+  <div>
+    <!-- Hopper -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <span class="card-title">Hopper Status</span>
+        <span class="text-sm text-muted">Redis queue depth</span>
+      </div>
+      <div class="card-body">
+        <div style="display:flex;gap:24px">
+          <div>
+            <div class="stat-label">Queued</div>
+            <div class="stat-value" id="hopperQueued">{{ hopper_stats.queued }}</div>
+          </div>
+          <div>
+            <div class="stat-label">In Flight</div>
+            <div class="stat-value" id="hopperFlight">{{ hopper_stats.in_flight }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Assigned agents -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <span class="card-title">Assigned Agents</span>
+        <span class="badge badge-active">{{ agents|length }}</span>
+      </div>
+      {% if agents %}
+      <div class="table-wrap">
+        <table class="table table-sm">
+          <thead>
+            <tr><th>Agent</th><th>Status</th><th>Joined</th></tr>
+          </thead>
+          <tbody>
+            {% for ca in agents %}
+            <tr>
+              <td style="font-weight:500">{{ ca.agent.get_full_name|default:ca.agent.username }}</td>
+              <td>
+                {% with st=ca.agent.agent_status %}
+                {% if st %}
+                <span class="badge badge-{{ st.status }}">{{ st.get_status_display }}</span>
+                {% else %}—{% endif %}
+                {% endwith %}
+              </td>
+              <td class="text-sm text-muted">{{ ca.joined_at|date:"d M" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body" style="color:var(--color-text-3);font-size:13px;text-align:center;padding:24px">
+        No agents assigned. Go to Settings → assign agents.
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Recent calls -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">Recent Calls</span></div>
+      {% with calls=campaign.call_logs.all|slice:":15" %}
+      {% if calls %}
+      <div class="table-wrap">
+        <table class="table table-sm">
+          <thead>
+            <tr><th>Time</th><th>Phone</th><th>Status</th><th>Duration</th><th>Disposition</th></tr>
+          </thead>
+          <tbody>
+            {% for c in calls %}
+            <tr>
+              <td class="text-mono text-sm">{{ c.started_at|date:"H:i" }}</td>
+              <td class="text-mono text-sm">{{ c.phone_number }}</td>
+              <td><span class="badge badge-{{ c.status }}" style="font-size:10px">{{ c.get_status_display }}</span></td>
+              <td class="text-mono text-sm">{{ c.duration_display }}</td>
+              <td class="text-sm">{{ c.disposition.name|default:"—" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body" style="color:var(--color-text-3);font-size:13px;text-align:center;padding:24px">
+        No calls yet today.
+      </div>
+      {% endif %}
+      {% endwith %}
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div>
+    <!-- Dispositions -->
+    <div class="card mb-4">
+      <div class="card-header">
+        <span class="card-title">Dispositions</span>
+        <a href="{% url 'campaigns:dispositions' %}" class="text-sm">Manage</a>
+      </div>
+      <div class="card-body" style="padding:12px">
+        {% for d in dispositions %}
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 0">
+          <span style="width:8px;height:8px;border-radius:50%;background:{{ d.color }};flex-shrink:0"></span>
+          <span style="font-size:13px;flex:1">{{ d.name }}</span>
+          {% if d.hotkey %}
+          <span style="font-size:10px;background:var(--color-bg);border:1px solid var(--color-border);
+                       padding:1px 5px;border-radius:3px;font-family:var(--font-mono)">{{ d.hotkey|upper }}</span>
+          {% endif %}
+        </div>
+        {% empty %}
+        <div class="text-sm text-muted">No dispositions configured.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Config summary -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">Configuration</span></div>
+      <div class="card-body" style="padding:12px">
+        {% with c=campaign %}
+        <div class="lead-field"><span class="lead-field-label">Dial Mode</span><span>{{ c.get_dial_mode_display }}</span></div>
+        <div class="lead-field"><span class="lead-field-label">Dial Ratio</span><span>{{ c.dial_ratio }}</span></div>
+        <div class="lead-field"><span class="lead-field-label">Abandon %</span><span>{{ c.abandon_rate }}%</span></div>
+        <div class="lead-field"><span class="lead-field-label">Timeout</span><span>{{ c.dial_timeout }}s</span></div>
+        <div class="lead-field"><span class="lead-field-label">AMD</span>
+          <span>{% if c.amd_enabled %}<span class="badge badge-active">On</span>{% else %}Off{% endif %}</span>
+        </div>
+        <div class="lead-field"><span class="lead-field-label">Recording</span>
+          <span>{% if c.enable_recording %}<span class="badge badge-active">On</span>{% else %}Off{% endif %}</span>
+        </div>
+        <div class="lead-field"><span class="lead-field-label">Auto Wrapup</span>
+          <span>{% if c.auto_wrapup_enabled %}{{ c.auto_wrapup_timeout }}s{% else %}Off{% endif %}</span>
+        </div>
+        <div class="lead-field"><span class="lead-field-label">Max Attempts</span><span>{{ c.max_attempts }}</span></div>
+        <div class="lead-field"><span class="lead-field-label">Carrier</span><span>{{ c.carrier.name|default:"—" }}</span></div>
+        {% endwith %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+
+async function ctrl(action) {
+  if (action === 'stop' && !confirm('Stop this campaign?')) return;
+  const res  = await fetch('{% url "campaigns:control" campaign.pk %}', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
+    body:    `action=${action}`,
+  });
+  const data = await res.json();
+  if (data.success) {
+    DF.toast(`Campaign ${data.display}`, 'success');
+    setTimeout(() => location.reload(), 800);
+  }
+}
+
+// Live campaign stats via supervisor WS
+const ws = new ReconnectingWS('/ws/supervisor/', {
+  onmessage(data) {
+    if (data.type === 'campaign_stats' && data.campaign_id == {{ campaign.pk }}) {
+      document.getElementById('stCalls').textContent    = data.calls_today;
+      document.getElementById('stAnswered').textContent = data.answered;
+      document.getElementById('stAbandon').textContent  = parseFloat(data.abandon_rate).toFixed(1) + '%';
+      document.getElementById('stAgents').textContent   = data.agents_active;
+    }
+  }
+});
+
+async function refillHopper() {
+  const res  = await fetch('{% url "campaigns:hopper_refill" campaign.pk %}', {
+    method: 'POST', headers: { 'X-CSRFToken': csrf }
+  });
+  const data = await res.json();
+  if (data.success) {
+    DF.toast(data.message, 'success');
+    document.getElementById('hopperQueued').textContent = parseInt(document.getElementById('hopperQueued').textContent) + data.added;
+  }
+}
+
+// Refresh hopper stats every 15s
+setInterval(async () => {
+  const data = await DF.get('{% url "campaigns:stats_api" campaign.pk %}');
+  if (data.hopper) {
+    document.getElementById('hopperQueued').textContent = data.hopper.queued;
+    document.getElementById('hopperFlight').textContent = data.hopper.in_flight;
+  }
+}, 15000);
+</script>
+{% endblock %}

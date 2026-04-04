@@ -1,0 +1,191 @@
+{% extends "base/base.html" %}
+{% block title %}{{ lead.full_name }} — DialFlow Pro{% endblock %}
+{% block nav_leads %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">{{ lead.full_name|default:lead.primary_phone }}</div>
+    <div class="page-subtitle">
+      Lead #{{ lead.pk }}
+      {% if lead.do_not_call %}<span class="badge" style="background:#FEF2F2;color:#991B1B;margin-left:8px">DNC</span>{% endif %}
+      {% if not lead.is_active %}<span class="badge badge-offline" style="margin-left:8px">Inactive</span>{% endif %}
+    </div>
+  </div>
+  <a href="{% url 'leads:list' %}" class="btn btn-secondary">
+    <i class="fa-solid fa-arrow-left"></i> Back
+  </a>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 360px;gap:20px">
+
+  <!-- LEFT: info + attempts -->
+  <div>
+    <div class="card mb-4">
+      <div class="card-header"><span class="card-title">Contact Details</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          {% with fields=lead %}
+          <div>
+            <div class="form-label">Full Name</div>
+            <div style="font-size:15px;font-weight:500">{{ lead.full_name|default:"—" }}</div>
+          </div>
+          <div>
+            <div class="form-label">Primary Phone</div>
+            <div style="font-size:15px;font-weight:500;font-family:var(--font-mono)">{{ lead.primary_phone }}</div>
+          </div>
+          {% if lead.alt_phone_1 %}
+          <div>
+            <div class="form-label">Alt Phone 1</div>
+            <div class="text-mono">{{ lead.alt_phone_1 }}</div>
+          </div>
+          {% endif %}
+          {% if lead.alt_phone_2 %}
+          <div>
+            <div class="form-label">Alt Phone 2</div>
+            <div class="text-mono">{{ lead.alt_phone_2 }}</div>
+          </div>
+          {% endif %}
+          <div>
+            <div class="form-label">Email</div>
+            <div>{{ lead.email|default:"—" }}</div>
+          </div>
+          <div>
+            <div class="form-label">Company</div>
+            <div>{{ lead.company|default:"—" }}</div>
+          </div>
+          <div>
+            <div class="form-label">Location</div>
+            <div>{{ lead.city|default:"" }}{% if lead.city and lead.state %}, {% endif %}{{ lead.state|default:"" }} {{ lead.country|default:"" }}</div>
+          </div>
+          <div>
+            <div class="form-label">Timezone</div>
+            <div>{{ lead.timezone|default:"—" }}</div>
+          </div>
+          <div>
+            <div class="form-label">Source</div>
+            <div>{{ lead.source|default:"—" }}</div>
+          </div>
+          <div>
+            <div class="form-label">Priority</div>
+            <div>{{ lead.priority }}</div>
+          </div>
+          {% endwith %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Call attempts -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">Call History</span></div>
+      {% if attempts %}
+      <div class="table-wrap">
+        <table class="table table-sm">
+          <thead>
+            <tr><th>Date</th><th>Campaign</th><th>Result</th><th>Duration</th><th>Disposition</th></tr>
+          </thead>
+          <tbody>
+            {% for a in attempts %}
+            <tr>
+              <td class="text-mono text-sm">{{ a.attempted_at|date:"d M H:i" }}</td>
+              <td class="text-sm">{{ a.campaign.name|default:"—" }}</td>
+              <td><span class="badge badge-{{ a.result|default:'other' }}" style="font-size:11px">{{ a.result|default:"—"|title }}</span></td>
+              <td class="text-mono text-sm">
+                {% if a.call_log %}{{ a.call_log.duration_display }}{% else %}—{% endif %}
+              </td>
+              <td class="text-sm">
+                {% if a.call_log and a.call_log.disposition %}{{ a.call_log.disposition.name }}{% else %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="card-body" style="text-align:center;color:var(--color-text-3);padding:32px;font-size:13px">
+        No call history yet.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- RIGHT: campaigns + notes -->
+  <div>
+    <!-- Campaigns -->
+    <div class="card mb-4">
+      <div class="card-header"><span class="card-title">Campaigns</span></div>
+      <div class="card-body" style="padding:12px">
+        {% for c in lead.campaigns.all %}
+        <div style="display:flex;align-items:center;justify-content:space-between;
+                    padding:7px 0;border-bottom:1px solid var(--color-border)">
+          <div>
+            <div style="font-size:13.5px;font-weight:500">{{ c.name }}</div>
+            <span class="badge badge-{{ c.status }}" style="font-size:10px">{{ c.get_status_display }}</span>
+          </div>
+        </div>
+        {% empty %}
+        <div style="color:var(--color-text-3);font-size:13px">Not in any campaign.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Notes -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Notes</span>
+      </div>
+      <div class="card-body" style="padding:12px">
+        <!-- Add note -->
+        <div style="margin-bottom:12px">
+          <textarea class="form-input" id="noteInput" rows="2"
+                    placeholder="Add a note…" style="resize:none;font-size:13px"></textarea>
+          <button class="btn btn-primary btn-sm w-full mt-2" onclick="addNote()" style="margin-top:8px">
+            <i class="fa-solid fa-plus"></i> Add Note
+          </button>
+        </div>
+        <hr class="divider">
+        <div id="notesList">
+          {% for note in notes %}
+          <div style="padding:8px 0;border-bottom:1px solid var(--color-border)">
+            <div style="font-size:13px;color:var(--color-text-1)">{{ note.note }}</div>
+            <div class="text-sm text-muted mt-1">
+              {{ note.agent.get_full_name|default:note.agent.username|default:"System" }}
+              · {{ note.created_at|date:"d M H:i" }}
+              {% if note.campaign %} · {{ note.campaign.name }}{% endif %}
+            </div>
+          </div>
+          {% empty %}
+          <div style="color:var(--color-text-3);font-size:13px;text-align:center;padding:16px">
+            No notes yet.
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function addNote() {
+  const text = document.getElementById('noteInput').value.trim();
+  if (!text) return;
+  const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+  const res  = await fetch('{% url "leads:add_note" lead.pk %}', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
+    body:    `note=${encodeURIComponent(text)}`,
+  });
+  const data = await res.json();
+  if (data.success) {
+    document.getElementById('noteInput').value = '';
+    const list = document.getElementById('notesList');
+    const div  = document.createElement('div');
+    div.style.cssText = 'padding:8px 0;border-bottom:1px solid var(--color-border)';
+    div.innerHTML = `<div style="font-size:13px">${data.note}</div>
+      <div class="text-sm text-muted mt-1">${data.agent} · just now</div>`;
+    list.insertBefore(div, list.firstChild);
+    DF.toast('Note added', 'success');
+  }
+}
+</script>
+{% endblock %}

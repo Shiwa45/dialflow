@@ -1,0 +1,96 @@
+{% extends "base/base.html" %}
+{% block title %}Callbacks — DialFlow Pro{% endblock %}
+{% block nav_campaigns %}active{% endblock %}
+
+{% block topbar_right %}
+<a href="{% url 'campaigns:list' %}" class="btn btn-secondary btn-sm">
+  <i class="fa-solid fa-arrow-left"></i> Campaigns
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Scheduled Callbacks</div>
+    <div class="page-subtitle">Leads waiting for a follow-up call</div>
+  </div>
+</div>
+
+{% if past_due %}
+<div class="card mb-4" style="border-color:var(--color-danger)">
+  <div class="card-header" style="background:var(--color-danger-lt)">
+    <span class="card-title" style="color:var(--color-danger)">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      Overdue Callbacks ({{ past_due|length }})
+    </span>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>Lead</th><th>Phone</th><th>Campaign</th><th>Agent</th><th>Due</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        {% for cb in past_due %}
+        <tr>
+          <td>
+            {% if cb.lead %}
+            <a href="{% url 'leads:detail' cb.lead.pk %}" style="font-weight:500">{{ cb.lead.full_name }}</a>
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-mono text-sm">{{ cb.lead.primary_phone|default:"—" }}</td>
+          <td class="text-sm">{{ cb.campaign.name|default:"—" }}</td>
+          <td class="text-sm">{{ cb.agent.get_full_name|default:cb.agent.username|default:"—" }}</td>
+          <td>
+            <span class="badge" style="background:var(--color-danger-lt);color:#991B1B">
+              {{ cb.callback_at|date:"d M H:i" }}
+            </span>
+          </td>
+          <td class="text-sm text-muted">{{ cb.notes|truncatechars:40 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Upcoming Callbacks</span>
+    <span class="badge badge-active">{{ upcoming|length }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>Lead</th><th>Phone</th><th>Campaign</th><th>Agent</th><th>Scheduled</th><th>Disposition</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        {% for cb in upcoming %}
+        <tr>
+          <td>
+            {% if cb.lead %}
+            <a href="{% url 'leads:detail' cb.lead.pk %}" style="font-weight:500">{{ cb.lead.full_name }}</a>
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-mono text-sm">{{ cb.lead.primary_phone|default:"—" }}</td>
+          <td class="text-sm">{{ cb.campaign.name|default:"—" }}</td>
+          <td class="text-sm">{{ cb.agent.get_full_name|default:cb.agent.username|default:"—" }}</td>
+          <td>
+            <strong>{{ cb.callback_at|date:"d M Y" }}</strong>
+            <div class="text-sm text-muted">{{ cb.callback_at|date:"H:i" }}</div>
+          </td>
+          <td class="text-sm">{{ cb.disposition.name }}</td>
+          <td class="text-sm text-muted">{{ cb.notes|truncatechars:40 }}</td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="7" style="text-align:center;padding:40px;color:var(--color-text-3)">
+            No upcoming callbacks scheduled.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

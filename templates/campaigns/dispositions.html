@@ -1,0 +1,175 @@
+{% extends "base/base.html" %}
+{% block title %}Dispositions — DialFlow Pro{% endblock %}
+{% block nav_campaigns %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Dispositions</div>
+    <div class="page-subtitle">Configure call outcomes available to agents</div>
+  </div>
+  <button class="btn btn-primary" onclick="openCreateModal()">
+    <i class="fa-solid fa-plus"></i> New Disposition
+  </button>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table" id="dispTable">
+      <thead>
+        <tr>
+          <th>Color</th>
+          <th>Name</th>
+          <th>Category</th>
+          <th>Outcome</th>
+          <th>Hotkey</th>
+          <th>System</th>
+          <th>Active</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in dispositions %}
+        <tr id="drow-{{ d.pk }}">
+          <td>
+            <span style="display:inline-block;width:20px;height:20px;border-radius:4px;
+                         background:{{ d.color }};border:1px solid var(--color-border)"></span>
+          </td>
+          <td style="font-weight:500">{{ d.name }}</td>
+          <td class="text-sm">{{ d.get_category_display }}</td>
+          <td class="text-sm">{{ d.get_outcome_display }}</td>
+          <td>
+            {% if d.hotkey %}
+            <span style="font-size:11px;background:var(--color-bg);border:1px solid var(--color-border);
+                         padding:2px 8px;border-radius:4px;font-family:var(--font-mono)">
+              {{ d.hotkey|upper }}
+            </span>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if d.is_system %}<span class="badge badge-active">System</span>{% else %}—{% endif %}
+          </td>
+          <td>
+            {% if d.is_active %}<span class="badge badge-active">Yes</span>
+            {% else %}<span class="badge badge-offline">No</span>{% endif %}
+          </td>
+          <td>
+            {% if not d.is_system %}
+            <button class="btn btn-danger btn-sm btn-icon" title="Delete"
+                    onclick="deleteDisp({{ d.pk }}, '{{ d.name|escapejs }}')">
+              <i class="fa-solid fa-trash"></i>
+            </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" style="text-align:center;padding:40px;color:var(--color-text-3)">
+          No dispositions yet. Create system dispositions by running <code>python manage.py setup_initial_data</code>.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Create Modal -->
+<div class="disposition-overlay" id="createModal">
+  <div class="disposition-modal" style="width:440px">
+    <div class="disposition-title">New Disposition</div>
+    <div class="disposition-subtitle">Define a call outcome agents can select</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group" style="grid-column:1/-1">
+        <label class="form-label">Name *</label>
+        <input class="form-input" id="newName" placeholder="e.g. Not Interested">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Category</label>
+        <select class="form-input" id="newCategory">
+          <option value="sale">Sale / Converted</option>
+          <option value="no_answer">No Answer</option>
+          <option value="busy">Busy</option>
+          <option value="callback">Callback</option>
+          <option value="dnc">Do Not Call</option>
+          <option value="not_interested" selected>Not Interested</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Outcome</label>
+        <select class="form-input" id="newOutcome">
+          <option value="recycle" selected>Recycle</option>
+          <option value="complete">Complete</option>
+          <option value="dnc">Add to DNC</option>
+          <option value="callback">Callback</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Color</label>
+        <input type="color" class="form-input" id="newColor" value="#6B7280">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Hotkey (single key)</label>
+        <input class="form-input" id="newHotkey" maxlength="1" placeholder="e.g. n">
+      </div>
+    </div>
+
+    <div style="display:flex;gap:10px;margin-top:8px">
+      <button class="btn btn-primary" onclick="createDisp()">
+        <i class="fa-solid fa-plus"></i> Create
+      </button>
+      <button class="btn btn-secondary" onclick="closeCreateModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function openCreateModal()  { document.getElementById('createModal').classList.add('visible'); }
+function closeCreateModal() { document.getElementById('createModal').classList.remove('visible'); }
+
+document.getElementById('createModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('createModal')) closeCreateModal();
+});
+
+const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+
+async function createDisp() {
+  const name = document.getElementById('newName').value.trim();
+  if (!name) { DF.toast('Name is required', 'warning'); return; }
+
+  const form = new FormData();
+  form.append('name',      name);
+  form.append('category',  document.getElementById('newCategory').value);
+  form.append('outcome',   document.getElementById('newOutcome').value);
+  form.append('color',     document.getElementById('newColor').value);
+  form.append('hotkey',    document.getElementById('newHotkey').value.trim());
+  form.append('sort_order','0');
+
+  const res  = await fetch('{% url "campaigns:disposition_create" %}', {
+    method: 'POST', headers: { 'X-CSRFToken': csrf }, body: form,
+  });
+  const data = await res.json();
+  if (data.success) {
+    DF.toast(`Disposition "${data.name}" created`, 'success');
+    closeCreateModal();
+    setTimeout(() => location.reload(), 800);
+  } else {
+    DF.toast('Error: ' + JSON.stringify(data.errors), 'error');
+  }
+}
+
+async function deleteDisp(id, name) {
+  if (!confirm(`Delete disposition "${name}"?`)) return;
+  const res  = await fetch(`/campaigns/dispositions/${id}/delete/`, {
+    method: 'POST', headers: { 'X-CSRFToken': csrf },
+  });
+  const data = await res.json();
+  if (data.success) {
+    document.getElementById(`drow-${id}`)?.remove();
+    DF.toast(`Deleted "${name}"`, 'info');
+  } else {
+    DF.toast(data.error || 'Delete failed', 'error');
+  }
+}
+</script>
+{% endblock %}

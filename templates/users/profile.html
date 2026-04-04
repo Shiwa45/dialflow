@@ -1,0 +1,85 @@
+{% extends "base/base.html" %}
+{% block title %}Profile — DialFlow Pro{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">My Profile</div>
+    <div class="page-subtitle">{{ user.get_full_name|default:user.username }}</div>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 300px;gap:20px;max-width:860px">
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Account Details</span></div>
+    <div class="card-body">
+      <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+        {% for field in form %}
+        <div class="form-group">
+          <label class="form-label">{{ field.label }}</label>
+          {{ field }}
+          {% if field.help_text %}<div class="form-help">{{ field.help_text }}</div>{% endif %}
+          {% if field.errors %}<div class="form-error">{{ field.errors.0 }}</div>{% endif %}
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn btn-primary">
+          <i class="fa-solid fa-floppy-disk"></i> Save Changes
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div>
+    <div class="card mb-4">
+      <div class="card-header"><span class="card-title">Account Info</span></div>
+      <div class="card-body" style="padding:12px">
+        <div class="lead-field">
+          <span class="lead-field-label">Username</span>
+          <span class="text-mono">{{ user.username }}</span>
+        </div>
+        <div class="lead-field">
+          <span class="lead-field-label">Role</span>
+          <span class="badge badge-{{ user.role }}">{{ user.get_role_display }}</span>
+        </div>
+        <div class="lead-field">
+          <span class="lead-field-label">Joined</span>
+          <span class="text-sm">{{ user.date_joined|date:"d M Y" }}</span>
+        </div>
+        <div class="lead-field">
+          <span class="lead-field-label">Last login</span>
+          <span class="text-sm">{{ user.last_login|date:"d M Y H:i"|default:"Never" }}</span>
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--color-border)">
+          <a href="{% url 'users:change_password' %}" class="btn btn-secondary w-full btn-sm">
+            <i class="fa-solid fa-lock"></i> Change Password
+          </a>
+        </div>
+      </div>
+    </div>
+
+    {% if user.phone %}
+    <div class="card">
+      <div class="card-header"><span class="card-title">Phone Extension</span></div>
+      <div class="card-body" style="padding:12px">
+        {% with phone=user.phone %}
+        <div class="lead-field">
+          <span class="lead-field-label">Extension</span>
+          <span class="text-mono" style="font-weight:600;font-size:16px">{{ phone.extension }}</span>
+        </div>
+        <div class="lead-field">
+          <span class="lead-field-label">Type</span>
+          <span>{{ phone.get_phone_type_display }}</span>
+        </div>
+        <div class="lead-field">
+          <span class="lead-field-label">SIP URI</span>
+          <span class="text-mono text-sm" style="word-break:break-all">{{ phone.get_sip_uri }}</span>
+        </div>
+        {% endwith %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

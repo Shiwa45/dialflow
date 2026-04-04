@@ -1,0 +1,187 @@
+{% extends "base/base.html" %}
+{% block title %}Agent Dashboard — DialFlow Pro{% endblock %}
+{% block nav_dashboard %}active{% endblock %}
+
+{% block extra_css %}
+<style>
+  .page-body { padding: 16px; height: calc(100vh - 52px); overflow: hidden; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-agent" id="agentDashboard">
+
+  <!-- LEFT COLUMN -->
+  <div class="dashboard-left">
+
+    <!-- Status bar -->
+    <div class="agent-statusbar">
+      <div class="status-indicator">
+        <div class="status-dot offline" id="statusDot"></div>
+        <div>
+          <div class="status-label" id="statusLabel">Offline</div>
+          <div class="status-since" id="statusSince"></div>
+        </div>
+      </div>
+      <div class="status-timer" id="statusTimer">00:00</div>
+
+      <div class="status-actions">
+        <button class="status-chip" data-set-status="ready" disabled>Ready</button>
+        <button class="status-chip" data-set-status="break"  disabled>Break</button>
+        {% if my_campaigns|length > 1 %}
+        <select id="campaignSelect" class="form-input" style="width:160px;font-size:12.5px;padding:5px 8px">
+          <option value="">Select campaign</option>
+          {% for c in my_campaigns %}
+          <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Call panel -->
+    <div class="call-panel">
+      <div class="call-panel-body" id="callIdle">
+        <div class="call-idle-icon"><i class="fa-solid fa-headset"></i></div>
+        <div class="call-idle-text">Waiting for call</div>
+        <div class="call-idle-sub">Set status to <strong>Ready</strong> to receive calls</div>
+      </div>
+
+      <div class="call-active" id="callActive">
+        <div class="call-avatar" id="callAvatar">?</div>
+        <div>
+          <div class="call-name"  id="callLeadName">—</div>
+          <div class="call-phone" id="callLeadPhone">—</div>
+        </div>
+        <div class="call-status-badge ringing" id="callBadge">Ringing…</div>
+        <div class="call-timer" id="callTimer">00:00</div>
+        <div class="call-controls">
+          <button class="ctrl-btn" id="btnMute"   title="Mute"     onclick="Agent.toggleMute()">
+            <i class="fa-solid fa-microphone"></i>
+          </button>
+          <button class="ctrl-btn" id="btnHold"   title="Hold"     onclick="Agent.toggleHold()">
+            <i class="fa-solid fa-pause"></i>
+          </button>
+          <button class="ctrl-btn danger" id="btnHangup" title="Hang up" onclick="Agent.hangup()">
+            <i class="fa-solid fa-phone-slash"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Today's stats -->
+    <div class="stat-grid stat-grid-3">
+      <div class="stat-card">
+        <div class="stat-label">Calls Today</div>
+        <div class="stat-value" id="statCalls">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Answered</div>
+        <div class="stat-value" id="statAnswered">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Talk Time</div>
+        <div class="stat-value" id="statTalk">00:00</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN -->
+  <div class="dashboard-right">
+
+    <!-- WebRTC softphone indicator -->
+    <div class="softphone-card">
+      <div class="softphone-header">
+        <i class="fa-solid fa-phone nav-icon"></i>
+        <span class="softphone-title">Softphone</span>
+        <div class="webrtc-indicator">
+          <div class="webrtc-dot connecting" id="webrtcDot"></div>
+          <span id="webrtcStatus">Connecting…</span>
+        </div>
+      </div>
+      <div style="padding:10px 16px;font-size:12px;color:var(--color-text-3)">
+        Ext: <strong id="extDisplay">{{ webrtc_config.extension|default:"—" }}</strong>
+        &nbsp;|&nbsp; Domain: <strong>{{ webrtc_config.domain }}</strong>
+      </div>
+    </div>
+
+    <!-- Lead info panel -->
+    <div class="lead-panel card" id="leadPanel">
+      <div class="card-header">
+        <span class="card-title">Lead Information</span>
+        <span class="text-sm text-muted" id="leadCampaign"></span>
+      </div>
+      <div class="card-body" id="leadBody">
+        <div style="text-align:center;padding:20px;color:var(--color-text-4);font-size:13px">
+          No active call
+        </div>
+      </div>
+    </div>
+
+    <!-- Notes -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">Call Notes</span></div>
+      <div class="card-body" style="padding:12px">
+        <textarea id="callNotes" class="form-input" rows="3"
+                  placeholder="Type notes for this call…"
+                  style="resize:none;font-size:13px"></textarea>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DISPOSITION OVERLAY -->
+<div class="disposition-overlay" id="dispOverlay">
+  <div class="disposition-modal">
+    <div class="disposition-title">Dispose Call</div>
+    <div class="disposition-subtitle" id="dispSubtitle">Select outcome for this call</div>
+
+    <div class="wrapup-timer" id="wrapupTimer" style="display:none">
+      Auto-wrapup in <span class="wrapup-countdown" id="wrapupCountdown">—</span>
+      <div class="wrapup-bar mt-1">
+        <div class="wrapup-bar-fill" id="wrapupBarFill" style="width:100%"></div>
+      </div>
+    </div>
+
+    <div class="disposition-grid" id="dispGrid"></div>
+
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <textarea id="dispNotes" class="form-input" rows="2"
+                placeholder="Optional notes…" style="resize:none"></textarea>
+    </div>
+
+    <div id="callbackRow" style="display:none" class="form-group">
+      <label class="form-label">Callback date/time</label>
+      <input type="datetime-local" id="callbackAt" class="form-input">
+    </div>
+
+    <button class="btn btn-primary w-full btn-lg" id="btnDispose"
+            onclick="Agent.submitDisposition()" disabled>
+      Submit Disposition
+    </button>
+  </div>
+</div>
+
+<!-- Hidden audio for WebRTC -->
+<audio id="remoteAudio" autoplay playsinline></audio>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jssip/3.10.0/jssip.min.js"></script>
+<script src="/static/js/agent.js"></script>
+<script>
+// Inject server-rendered config, then boot the Agent module
+document.addEventListener('DOMContentLoaded', () => {
+  Agent.init({
+    wsUrl:       '{{ webrtc_config.ws_url|escapejs }}',
+    sipUri:      '{{ webrtc_config.sip_uri|escapejs }}',
+    extension:   '{{ webrtc_config.extension|escapejs }}',
+    password:    '{{ webrtc_config.password|escapejs }}',
+    domain:      '{{ webrtc_config.domain|escapejs }}',
+    displayName: '{{ webrtc_config.display_name|escapejs }}',
+    stun:        '{{ webrtc_config.stun|escapejs }}',
+  });
+});
+</script>
+{% endblock %}

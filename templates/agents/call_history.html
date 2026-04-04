@@ -1,0 +1,83 @@
+{% extends "base/base.html" %}
+{% block title %}My Call History — DialFlow Pro{% endblock %}
+{% block nav_calls_agent %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">My Call History</div>
+    <div class="page-subtitle">{{ total }} total calls</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Phone</th>
+          <th>Lead</th>
+          <th>Campaign</th>
+          <th>Status</th>
+          <th>Duration</th>
+          <th>Disposition</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for call in page %}
+        <tr>
+          <td class="text-mono text-sm">{{ call.started_at|date:"d M H:i" }}</td>
+          <td class="text-mono">{{ call.phone_number }}</td>
+          <td>
+            {% if call.lead %}
+            <a href="{% url 'leads:detail' call.lead.pk %}">{{ call.lead.full_name }}</a>
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-sm">{{ call.campaign.name|default:"—" }}</td>
+          <td>
+            <span class="badge badge-{{ call.status }}">{{ call.get_status_display }}</span>
+          </td>
+          <td class="text-mono text-sm">{{ call.duration_display }}</td>
+          <td class="text-sm">{{ call.disposition.name|default:"—" }}</td>
+          <td>
+            <div style="display:flex;gap:4px">
+              <a href="{% url 'calls:detail' call.pk %}" class="btn btn-ghost btn-sm btn-icon" title="View">
+                <i class="fa-solid fa-eye"></i>
+              </a>
+              {% if call.recording_path %}
+              <a href="{% url 'calls:recording' call.pk %}" class="btn btn-ghost btn-sm btn-icon" title="Play">
+                <i class="fa-solid fa-play"></i>
+              </a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="8" style="text-align:center;padding:48px;color:var(--color-text-3)">
+            No calls yet. Set your status to <strong>Ready</strong> to start receiving calls.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if page.has_other_pages %}
+  <div style="padding:14px 16px;border-top:1px solid var(--color-border);
+              display:flex;align-items:center;justify-content:space-between">
+    <span class="text-sm text-muted">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+    <div style="display:flex;gap:4px">
+      {% if page.has_previous %}
+      <a href="?page={{ page.previous_page_number }}" class="btn btn-secondary btn-sm">Prev</a>
+      {% endif %}
+      {% if page.has_next %}
+      <a href="?page={{ page.next_page_number }}" class="btn btn-secondary btn-sm">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}DialFlow Pro{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link rel="stylesheet" href="/static/css/main.css">
+{% block extra_css %}{% endblock %}
+</head>
+<body class="{% block body_class %}app-layout{% endblock %}">
+
+{% block body %}
+<div class="app-shell">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-icon"><i class="fa-solid fa-phone-volume"></i></span>
+      <span class="brand-name">DialFlow</span>
+      <span class="brand-tag">Pro</span>
+    </div>
+
+    <nav class="sidebar-nav">
+      {% if user.is_supervisor %}
+      <a href="{% url 'campaigns:list' %}" class="nav-item {% block nav_campaigns %}{% endblock %}">
+        <i class="fa-solid fa-bullhorn nav-icon"></i><span>Campaigns</span>
+      </a>
+      <a href="{% url 'leads:list' %}" class="nav-item {% block nav_leads %}{% endblock %}">
+        <i class="fa-solid fa-users nav-icon"></i><span>Leads</span>
+      </a>
+      <a href="{% url 'agents:supervisor' %}" class="nav-item {% block nav_monitor %}{% endblock %}">
+        <i class="fa-solid fa-display nav-icon"></i><span>Monitor</span>
+      </a>
+      <a href="{% url 'calls:list' %}" class="nav-item {% block nav_calls %}{% endblock %}">
+        <i class="fa-solid fa-phone nav-icon"></i><span>Call Logs</span>
+      </a>
+      <a href="{% url 'reports:home' %}" class="nav-item {% block nav_reports %}{% endblock %}">
+        <i class="fa-solid fa-chart-bar nav-icon"></i><span>Reports</span>
+      </a>
+      <a href="{% url 'campaigns:callbacks' %}" class="nav-item {% block nav_callbacks %}{% endblock %}">
+        <i class="fa-solid fa-phone-missed nav-icon"></i><span>Callbacks</span>
+      </a>
+      <a href="{% url 'telephony:server_list' %}" class="nav-item {% block nav_telephony %}{% endblock %}">
+        <i class="fa-solid fa-server nav-icon"></i><span>Telephony</span>
+      </a>
+      {% endif %}
+
+      {% if user.is_agent %}
+      <a href="{% url 'agents:dashboard' %}" class="nav-item {% block nav_dashboard %}{% endblock %}">
+        <i class="fa-solid fa-headset nav-icon"></i><span>Dashboard</span>
+      </a>
+      <a href="{% url 'agents:call_history_page' %}" class="nav-item {% block nav_calls_agent %}{% endblock %}">
+        <i class="fa-solid fa-clock-rotate-left nav-icon"></i><span>My Calls</span>
+      </a>
+      {% endif %}
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-card">
+        <div class="user-avatar">{{ user.first_name.0|default:user.username.0|upper }}</div>
+        <div class="user-info">
+          <span class="user-name">{{ user.get_full_name|default:user.username }}</span>
+          <span class="user-role">{{ user.get_role_display }}</span>
+        </div>
+        <a href="{% url 'users:logout' %}" class="logout-btn" title="Logout">
+          <i class="fa-solid fa-arrow-right-from-bracket"></i>
+        </a>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main content area -->
+  <main class="main-content">
+    <div class="topbar">
+      <button class="sidebar-toggle" onclick="toggleSidebar()">
+        <i class="fa-solid fa-bars"></i>
+      </button>
+      <div class="topbar-right">
+        {% block topbar_right %}{% endblock %}
+        <div class="connection-status" id="connStatus" title="Server connection">
+          <span class="conn-dot"></span>
+        </div>
+      </div>
+    </div>
+
+    {% if messages %}
+    <div class="messages-container">
+      {% for message in messages %}
+      <div class="toast toast-{{ message.tags }}" data-auto-dismiss>
+        <i class="fa-solid {% if message.tags == 'success' %}fa-circle-check{% elif message.tags == 'error' %}fa-circle-xmark{% else %}fa-circle-info{% endif %}"></i>
+        {{ message }}
+        <button onclick="this.parentElement.remove()"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="page-body">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+{% endblock %}
+
+<script src="/static/js/app.js"></script>
+{% block extra_js %}{% endblock %}
+
+<script>
+// Auto-dismiss toasts
+document.querySelectorAll('[data-auto-dismiss]').forEach(el => {
+  setTimeout(() => el.remove(), 4000);
+});
+
+// Sidebar toggle
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+}
+
+// Connection status indicator
+window.__connStatus = document.getElementById('connStatus');
+function setConnected(ok) {
+  if (window.__connStatus) {
+    window.__connStatus.className = 'connection-status ' + (ok ? 'connected' : 'disconnected');
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+{% extends "base/base.html" %}
+{% block title %}Campaign Report — DialFlow Pro{% endblock %}
+{% block nav_reports %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Campaign History</div>
+    <div class="page-subtitle">Daily snapshot data</div>
+  </div>
+  <a href="{% url 'reports:home' %}" class="btn btn-secondary">
+    <i class="fa-solid fa-arrow-left"></i> Back
+  </a>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4">
+  <div class="card-body" style="padding:12px">
+    <form method="get" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <select class="form-input" name="campaign_id" style="width:220px">
+        <option value="">All campaigns</option>
+        {% for c in campaigns %}
+        <option value="{{ c.pk }}"{% if request.GET.campaign_id == c.pk|stringformat:"s" %} selected{% endif %}>
+          {{ c.name }}
+        </option>
+        {% endfor %}
+      </select>
+      <select class="form-input" name="days" style="width:140px">
+        <option value="7"{% if days == 7 %} selected{% endif %}>Last 7 days</option>
+        <option value="14"{% if days == 14 %} selected{% endif %}>Last 14 days</option>
+        <option value="30"{% if days == 30 %} selected{% endif %}>Last 30 days</option>
+        <option value="90"{% if days == 90 %} selected{% endif %}>Last 90 days</option>
+      </select>
+      <button type="submit" class="btn btn-secondary">Apply</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Campaign</th>
+          <th>Total</th>
+          <th>Answered</th>
+          <th>Dropped</th>
+          <th>No Answer</th>
+          <th>Answer Rate</th>
+          <th>Abandon %</th>
+          <th>Avg Talk</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in snapshots %}
+        <tr>
+          <td class="text-mono text-sm">{{ s.date|date:"d M Y" }}</td>
+          <td>
+            <a href="{% url 'campaigns:detail' s.campaign.pk %}">{{ s.campaign.name }}</a>
+          </td>
+          <td class="text-mono">{{ s.calls_total }}</td>
+          <td class="text-mono">{{ s.calls_answered }}</td>
+          <td class="text-mono">{{ s.calls_dropped }}</td>
+          <td class="text-mono">{{ s.calls_no_answer }}</td>
+          <td class="text-mono">
+            {% if s.calls_total %}
+              {% widthratio s.calls_answered s.calls_total 100 %}%
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-mono">{{ s.abandon_rate|floatformat:1 }}%</td>
+          <td class="text-mono">{{ s.avg_talk_time }}s</td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="9" style="text-align:center;padding:40px;color:var(--color-text-3)">
+            No snapshot data for this period.
+            Snapshots are generated nightly at midnight.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

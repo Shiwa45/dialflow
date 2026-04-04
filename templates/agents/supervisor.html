@@ -1,0 +1,222 @@
+{% extends "base/base.html" %}
+{% block title %}Monitor — DialFlow Pro{% endblock %}
+{% block nav_monitor %}active{% endblock %}
+
+{% block topbar_right %}
+<span class="text-sm text-muted">Live <span id="liveTs"></span></span>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Live Monitor</div>
+    <div class="page-subtitle">Real-time agent and campaign activity</div>
+  </div>
+</div>
+
+<!-- Top stat cards (filled by JS) -->
+<div id="campaignCards" class="mb-6"></div>
+
+<div class="monitor-grid">
+
+  <!-- Left: agent grid -->
+  <div>
+    <div class="flex items-center justify-between mb-4">
+      <div class="card-title">
+        Agents
+        <span class="badge badge-ready" style="margin-left:6px" id="agentCountBadge">0</span>
+      </div>
+      <input class="form-input" style="width:200px" id="agentFilter"
+             placeholder="Filter agents…" oninput="filterAgents()">
+    </div>
+    <div class="agent-grid" id="agentGrid">
+      <div style="color:var(--color-text-3);font-size:13px;grid-column:1/-1;
+                  text-align:center;padding:32px">
+        Connecting…
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: campaign controls -->
+  <div>
+    <div class="card-title mb-4">Campaign Controls</div>
+    <div id="campaignControls">
+      <div class="text-sm text-muted">Loading…</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/supervisor.js"></script>
+<script>
+'use strict';
+
+// ── State ────────────────────────────────────────────────────────────────────
+let agents    = {};
+let campaigns = {};
+let agentTimers = {};
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+const ws = new ReconnectingWS('/ws/supervisor/', {
+  onmessage(data) {
+    const t = data.type;
+    if      (t === 'snapshot')             applySnapshot(data);
+    else if (t === 'agent_status_changed') { updateAgent(data); renderAgents(); }
+    else if (t === 'campaign_stats')       updateCampaignStats(data);
+    else if (t === 'campaign_updated')     { mergeCampaign(data); renderCampaignControls(); }
+    else if (t === 'disposition_recorded') {} // stat update comes via campaign_stats
+
+    document.getElementById('liveTs').textContent = new Date().toLocaleTimeString();
+  }
+});
+
+// ── Snapshot ──────────────────────────────────────────────────────────────────
+function applySnapshot(data) {
+  agents    = {};
+  campaigns = {};
+  (data.agents    || []).forEach(a => { agents[a.user_id]  = normaliseAgent(a); });
+  (data.campaigns || []).forEach(c => { campaigns[c.id]    = c; });
+  renderAgents();
+  renderCampaignCards();
+  renderCampaignControls();
+}
+
+function normaliseAgent(a) {
+  return {
+    user_id:           a.user_id,
+    user__username:    a.user__username,
+    full_name:         (a.user__first_name && a.user__last_name)
+                         ? `${a.user__first_name} ${a.user__last_name}`.trim()
+                         : a.full_name || a.user__username,
+    status:            a.status,
+    status_display:    a.status_display || Supervisor.titleCase(a.status),
+    active_campaign_id: a.active_campaign_id,
+    status_changed_at:  a.status_changed_at,
+  };
+}
+
+function updateAgent(data) {
+  agents[data.agent_id] = {
+    user_id:           data.agent_id,
+    user__username:    data.username,
+    full_name:         data.full_name || data.username,
+    status:            data.status,
+    status_display:    data.display,
+    active_campaign_id: data.campaign_id,
+    status_changed_at:  data.since,
+  };
+}
+
+function mergeCampaign(data) {
+  campaigns[data.id] = { ...(campaigns[data.id] || {}), ...data };
+}
+
+// ── Agent rendering ───────────────────────────────────────────────────────────
+function filterAgents() {
+  renderAgents();
+}
+
+function renderAgents() {
+  const filter = document.getElementById('agentFilter').value.toLowerCase();
+  const list   = Object.values(agents).filter(a =>
+    !filter ||
+    a.user__username?.toLowerCase().includes(filter) ||
+    a.full_name?.toLowerCase().includes(filter)
+  );
+
+  const activeCount = list.filter(a => a.status !== 'offline').length;
+  document.getElementById('agentCountBadge').textContent = activeCount;
+
+  const grid = document.getElementById('agentGrid');
+  if (!list.length) {
+    grid.innerHTML = '<div style="color:var(--color-text-3);font-size:13px;grid-column:1/-1;text-align:center;padding:32px">No active agents</div>';
+    return;
+  }
+
+  const order = { on_call:0, wrapup:1, ready:2, break:3, training:4, offline:5 };
+  list.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+
+  // Cancel existing timers
+  Object.values(agentTimers).forEach(f => f?.());
+  agentTimers = {};
+
+  grid.innerHTML = list.map(a => Supervisor.buildAgentCard(a, campaigns)).join('');
+
+  // Start per-agent status timers
+  list.forEach(a => {
+    const el = document.getElementById(`agttimer-${a.user_id}`);
+    if (!el || !a.status_changed_at) return;
+    const since = new Date(a.status_changed_at);
+    agentTimers[a.user_id] = DF.ticker(() => {
+      el.textContent = DF.formatDuration(DF.elapsed(since));
+    });
+  });
+}
+
+// ── Campaign rendering ────────────────────────────────────────────────────────
+function updateCampaignStats(data) {
+  if (!campaigns[data.campaign_id]) return;
+  Object.assign(campaigns[data.campaign_id], {
+    stat_calls_today:    data.calls_today,
+    stat_answered_today: data.answered,
+    stat_abandon_rate:   data.abandon_rate,
+    stat_agents_active:  data.agents_active,
+  });
+
+  // Live-patch the DOM cells without full re-render
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  const id = data.campaign_id;
+  set(`cs-calls-${id}`, data.calls_today);
+  set(`cs-ans-${id}`,   data.answered);
+  set(`cs-abn-${id}`,   parseFloat(data.abandon_rate || 0).toFixed(1) + '%');
+  set(`cs-agt-${id}`,   data.agents_active);
+
+  renderCampaignCards();
+}
+
+function renderCampaignCards() {
+  const list         = Object.values(campaigns);
+  const activeCount  = list.filter(c => c.status === 'active').length;
+  const totalCalls   = list.reduce((s, c) => s + (c.stat_calls_today    || 0), 0);
+  const totalAnswered = list.reduce((s, c) => s + (c.stat_answered_today || 0), 0);
+  const totalAgents  = list.reduce((s, c) => s + (c.stat_agents_active  || 0), 0);
+
+  document.getElementById('campaignCards').innerHTML = `
+  <div class="stat-grid stat-grid-4 mb-4">
+    <div class="stat-card">
+      <div class="stat-label">Active Campaigns</div>
+      <div class="stat-value">${activeCount}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Calls Today</div>
+      <div class="stat-value">${totalCalls.toLocaleString()}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Answered</div>
+      <div class="stat-value">${totalAnswered.toLocaleString()}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Active Agents</div>
+      <div class="stat-value">${totalAgents}</div>
+    </div>
+  </div>`;
+}
+
+function renderCampaignControls() {
+  const list = Object.values(campaigns);
+  const ctrl = document.getElementById('campaignControls');
+  if (!list.length) {
+    ctrl.innerHTML = '<div class="text-sm text-muted">No active campaigns</div>';
+    return;
+  }
+  ctrl.innerHTML = list.map(c => Supervisor.buildCampaignControl(c)).join('');
+}
+
+// Expose actions for onclick handlers in Supervisor.buildCampaignControl / buildAgentCard
+window.Supervisor = { ...window.Supervisor,
+  campaignAction: Supervisor.campaignAction,
+  forceLogout:    Supervisor.forceLogout,
+};
+</script>
+{% endblock %}

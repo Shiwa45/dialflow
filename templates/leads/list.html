@@ -1,0 +1,219 @@
+{% extends "base/base.html" %}
+{% block title %}Leads — DialFlow Pro{% endblock %}
+{% block nav_leads %}active{% endblock %}
+
+{% block topbar_right %}
+<button class="btn btn-secondary btn-sm" onclick="openImportModal()">
+  <i class="fa-solid fa-upload"></i> Import CSV
+</button>
+<a href="{% url 'leads:export' %}" class="btn btn-secondary btn-sm">
+  <i class="fa-solid fa-download"></i> Export
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Leads</div>
+    <div class="page-subtitle">{{ total|default:0 }} active leads</div>
+  </div>
+</div>
+
+<!-- Search bar -->
+<div class="card mb-4">
+  <div class="card-body" style="padding:12px">
+    <form method="get" style="display:flex;gap:10px;align-items:center">
+      <input class="form-input" name="q" value="{{ search }}"
+             placeholder="Search name, phone, email…" style="flex:1;max-width:360px"
+             autofocus>
+      <button type="submit" class="btn btn-secondary">
+        <i class="fa-solid fa-magnifying-glass"></i> Search
+      </button>
+      {% if search %}<a href="{% url 'leads:list' %}" class="btn btn-ghost">Clear</a>{% endif %}
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Phone</th>
+          <th>Email</th>
+          <th>City</th>
+          <th>Priority</th>
+          <th>Status</th>
+          <th>Campaigns</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lead in page %}
+        <tr>
+          <td>
+            <a href="{% url 'leads:detail' lead.pk %}" style="font-weight:500">
+              {{ lead.full_name|default:"—" }}
+            </a>
+            {% if lead.company %}
+            <div class="text-sm text-muted">{{ lead.company }}</div>
+            {% endif %}
+          </td>
+          <td class="text-mono text-sm">{{ lead.primary_phone }}</td>
+          <td class="text-sm">{{ lead.email|default:"—" }}</td>
+          <td class="text-sm">{{ lead.city|default:"—" }}</td>
+          <td>
+            <span style="font-size:12px;padding:2px 8px;border-radius:12px;background:var(--color-bg);
+                         border:1px solid var(--color-border)">
+              {{ lead.priority }}
+            </span>
+          </td>
+          <td>
+            {% if lead.do_not_call %}
+              <span class="badge" style="background:#FEF2F2;color:#991B1B">DNC</span>
+            {% elif not lead.is_active %}
+              <span class="badge badge-offline">Inactive</span>
+            {% else %}
+              <span class="badge badge-active">Active</span>
+            {% endif %}
+          </td>
+          <td class="text-sm text-muted">
+            {% for c in lead.campaigns.all|slice:":2" %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+            {% if lead.campaigns.count > 2 %}+{{ lead.campaigns.count|add:"-2" }} more{% endif %}
+          </td>
+          <td>
+            <a href="{% url 'leads:detail' lead.pk %}" class="btn btn-ghost btn-sm btn-icon" title="View">
+              <i class="fa-solid fa-eye"></i>
+            </a>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="8" style="text-align:center;padding:48px;color:var(--color-text-3)">
+            {% if search %}
+              No leads match "<strong>{{ search }}</strong>"
+            {% else %}
+              No leads yet. <button class="btn btn-primary btn-sm" onclick="openImportModal()">
+                Import CSV
+              </button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if page.has_other_pages %}
+  <div style="padding:14px 16px;border-top:1px solid var(--color-border);
+              display:flex;align-items:center;justify-content:space-between">
+    <span class="text-sm text-muted">
+      Page {{ page.number }} of {{ page.paginator.num_pages }}
+    </span>
+    <div style="display:flex;gap:4px">
+      {% if page.has_previous %}
+      <a href="?page={{ page.previous_page_number }}{% if search %}&q={{ search }}{% endif %}"
+         class="btn btn-secondary btn-sm">Previous</a>
+      {% endif %}
+      {% if page.has_next %}
+      <a href="?page={{ page.next_page_number }}{% if search %}&q={{ search }}{% endif %}"
+         class="btn btn-secondary btn-sm">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Import Modal -->
+<div class="disposition-overlay" id="importModal">
+  <div class="disposition-modal" style="width:440px">
+    <div class="disposition-title">Import Leads from CSV</div>
+    <div class="disposition-subtitle">
+      First row must be headers. Required column: <code>primary_phone</code> (or <code>phone</code>).
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Campaign (optional)</label>
+      <select class="form-input" id="importCampaign">
+        <option value="">— no campaign —</option>
+        {% for c in campaigns %}
+        <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">CSV File</label>
+      <input type="file" id="importFile" class="form-input" accept=".csv,.txt">
+    </div>
+
+    <div id="importProgress" style="display:none" class="text-sm text-muted mt-2">
+      <i class="fa-solid fa-spinner fa-spin"></i> Importing…
+    </div>
+    <div id="importResult" style="display:none" class="mt-2"></div>
+
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn btn-primary" onclick="runImport()">
+        <i class="fa-solid fa-upload"></i> Import
+      </button>
+      <button class="btn btn-secondary" onclick="closeImportModal()">Cancel</button>
+    </div>
+
+    <div class="mt-4" style="font-size:12px;color:var(--color-text-3)">
+      <strong>Accepted columns:</strong> first_name, last_name, primary_phone, email,
+      company, city, state, country, timezone, source, priority, alt_phone_1, alt_phone_2
+    </div>
+  </div>
+</div>
+
+<script>
+function openImportModal()  { document.getElementById('importModal').classList.add('visible'); }
+function closeImportModal() { document.getElementById('importModal').classList.remove('visible'); }
+
+async function runImport() {
+  const file    = document.getElementById('importFile').files[0];
+  const campId  = document.getElementById('importCampaign').value;
+  if (!file) { DF.toast('Please select a CSV file', 'warning'); return; }
+
+  document.getElementById('importProgress').style.display = '';
+  document.getElementById('importResult').style.display   = 'none';
+
+  const form  = new FormData();
+  form.append('file', file);
+  if (campId) form.append('campaign_id', campId);
+
+  const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+  try {
+    const res  = await fetch('{% url "leads:import" %}', {
+      method: 'POST',
+      headers: { 'X-CSRFToken': csrf },
+      body: form,
+    });
+    const data = await res.json();
+    document.getElementById('importProgress').style.display = 'none';
+    const el = document.getElementById('importResult');
+    el.style.display = '';
+    if (data.success) {
+      el.innerHTML = `<div class="toast toast-success">
+        <i class="fa-solid fa-circle-check"></i>
+        Imported <strong>${data.created}</strong> leads, skipped ${data.skipped}.
+      </div>`;
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      el.innerHTML = `<div class="toast toast-error">
+        <i class="fa-solid fa-circle-xmark"></i> ${data.error}
+      </div>`;
+    }
+  } catch(e) {
+    document.getElementById('importProgress').style.display = 'none';
+    DF.toast('Import failed: ' + e.message, 'error');
+  }
+}
+
+// Close modal on backdrop click
+document.getElementById('importModal').addEventListener('click', function(e) {
+  if (e.target === this) closeImportModal();
+});
+</script>
+{% endblock %}

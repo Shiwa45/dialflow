@@ -1,0 +1,208 @@
+{% extends "base/base.html" %}
+{% block title %}Call {{ call.pk }} — DialFlow Pro{% endblock %}
+{% block nav_calls %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Call Detail</div>
+    <div class="page-subtitle">
+      {{ call.phone_number }}
+      <span class="badge badge-{{ call.status }}" style="margin-left:8px">
+        {{ call.get_status_display }}
+      </span>
+    </div>
+  </div>
+  <a href="{% url 'calls:list' %}" class="btn btn-secondary">
+    <i class="fa-solid fa-arrow-left"></i> Back
+  </a>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 320px;gap:20px">
+
+  <!-- LEFT: call info -->
+  <div>
+    <div class="card mb-4">
+      <div class="card-header"><span class="card-title">Call Information</span></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div>
+            <div class="form-label">Phone Number</div>
+            <div style="font-size:16px;font-weight:500;font-family:var(--font-mono)">
+              {{ call.phone_number }}
+            </div>
+          </div>
+          <div>
+            <div class="form-label">Direction</div>
+            <div>{{ call.get_direction_display }}</div>
+          </div>
+          <div>
+            <div class="form-label">Started</div>
+            <div>{{ call.started_at|date:"d M Y H:i:s"|default:"—" }}</div>
+          </div>
+          <div>
+            <div class="form-label">Answered</div>
+            <div>{{ call.answered_at|date:"H:i:s"|default:"—" }}</div>
+          </div>
+          <div>
+            <div class="form-label">Ended</div>
+            <div>{{ call.ended_at|date:"H:i:s"|default:"—" }}</div>
+          </div>
+          <div>
+            <div class="form-label">Duration</div>
+            <div style="font-family:var(--font-mono);font-size:16px;font-weight:500">
+              {{ call.duration_display }}
+            </div>
+          </div>
+          <div>
+            <div class="form-label">Campaign</div>
+            <div>
+              {% if call.campaign %}
+              <a href="{% url 'campaigns:detail' call.campaign.pk %}">{{ call.campaign.name }}</a>
+              {% else %}—{% endif %}
+            </div>
+          </div>
+          <div>
+            <div class="form-label">Agent</div>
+            <div>
+              {{ call.agent.get_full_name|default:call.agent.username|default:"—" }}
+            </div>
+          </div>
+          <div>
+            <div class="form-label">Lead</div>
+            <div>
+              {% if call.lead %}
+              <a href="{% url 'leads:detail' call.lead.pk %}">{{ call.lead.full_name }}</a>
+              {% else %}—{% endif %}
+            </div>
+          </div>
+          <div>
+            <div class="form-label">Disposition</div>
+            <div>
+              {% if call.disposition %}
+              <span style="display:inline-flex;align-items:center;gap:6px">
+                {% if call.disposition_record %}
+                <span style="width:8px;height:8px;border-radius:50%;
+                             background:{{ call.disposition_record.disposition.color }}"></span>
+                {% endif %}
+                {{ call.disposition.name }}
+              </span>
+              {% else %}—{% endif %}
+            </div>
+          </div>
+          {% if call.amd_result %}
+          <div>
+            <div class="form-label">AMD Result</div>
+            <div class="text-mono text-sm">{{ call.amd_result }}</div>
+          </div>
+          {% endif %}
+        </div>
+
+        {% if call.agent_notes %}
+        <hr class="divider">
+        <div class="form-label">Agent Notes</div>
+        <div style="font-size:13.5px;color:var(--color-text-1);margin-top:4px;
+                    background:var(--color-bg);padding:10px;border-radius:var(--radius-md)">
+          {{ call.agent_notes }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Recording player -->
+    {% if call.recording_path %}
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title"><i class="fa-solid fa-circle-dot" style="color:var(--color-danger)"></i> Recording</span>
+        <a href="{% url 'calls:recording' call.pk %}" class="btn btn-secondary btn-sm" download>
+          <i class="fa-solid fa-download"></i> Download
+        </a>
+      </div>
+      <div class="card-body">
+        <audio controls style="width:100%" preload="metadata">
+          <source src="{% url 'calls:recording' call.pk %}" type="audio/wav">
+          Your browser does not support the audio player.
+        </audio>
+        <div class="text-sm text-muted mt-2" style="font-family:var(--font-mono)">
+          {{ call.recording_path }}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- RIGHT: IDs & channel info -->
+  <div>
+    <div class="card mb-4">
+      <div class="card-header"><span class="card-title">Technical Details</span></div>
+      <div class="card-body" style="padding:12px">
+        <div class="lead-field">
+          <span class="lead-field-label">Call ID</span>
+          <span class="text-mono text-sm">{{ call.pk }}</span>
+        </div>
+        {% if call.channel_id %}
+        <div class="lead-field">
+          <span class="lead-field-label">Channel</span>
+          <span class="text-mono text-sm" style="word-break:break-all">{{ call.channel_id }}</span>
+        </div>
+        {% endif %}
+        {% if call.bridge_id %}
+        <div class="lead-field">
+          <span class="lead-field-label">Bridge</span>
+          <span class="text-mono text-sm" style="word-break:break-all">{{ call.bridge_id }}</span>
+        </div>
+        {% endif %}
+        <div class="lead-field">
+          <span class="lead-field-label">Ring time</span>
+          <span class="text-mono">{{ call.ring_duration }}s</span>
+        </div>
+        <div class="lead-field">
+          <span class="lead-field-label">Created</span>
+          <span class="text-sm">{{ call.created_at|date:"d M H:i" }}</span>
+        </div>
+      </div>
+    </div>
+
+    {% if call.disposition_record %}
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Disposition Detail</span>
+        {% if call.disposition_record.auto_applied %}
+        <span class="badge" style="background:var(--color-warning-lt);color:#92400E;font-size:10px">
+          Auto-applied
+        </span>
+        {% endif %}
+      </div>
+      <div class="card-body" style="padding:12px">
+        {% with d=call.disposition_record %}
+        <div class="lead-field">
+          <span class="lead-field-label">Agent</span>
+          <span>{{ d.agent.get_full_name|default:d.agent.username|default:"System" }}</span>
+        </div>
+        <div class="lead-field">
+          <span class="lead-field-label">Disposition</span>
+          <span>{{ d.disposition.name }}</span>
+        </div>
+        <div class="lead-field">
+          <span class="lead-field-label">Outcome</span>
+          <span>{{ d.disposition.get_outcome_display }}</span>
+        </div>
+        {% if d.callback_at %}
+        <div class="lead-field">
+          <span class="lead-field-label">Callback</span>
+          <span>{{ d.callback_at|date:"d M Y H:i" }}</span>
+        </div>
+        {% endif %}
+        {% if d.notes %}
+        <div class="lead-field" style="flex-direction:column">
+          <span class="lead-field-label">Notes</span>
+          <span style="margin-top:4px;font-size:13px">{{ d.notes }}</span>
+        </div>
+        {% endif %}
+        {% endwith %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

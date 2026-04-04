@@ -1,0 +1,73 @@
+{% extends "base/base.html" %}
+{% block title %}Reports — DialFlow Pro{% endblock %}
+{% block nav_reports %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Reports</div>
+    <div class="page-subtitle">Call analytics and performance</div>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px">
+  <a href="{% url 'reports:intraday' %}" class="card" style="padding:20px;text-decoration:none;
+     transition:border-color 150ms;display:block" onmouseover="this.style.borderColor='var(--color-accent)'"
+     onmouseout="this.style.borderColor=''">
+    <div style="font-size:24px;color:var(--color-accent);margin-bottom:10px">
+      <i class="fa-solid fa-chart-line"></i>
+    </div>
+    <div style="font-size:15px;font-weight:600;color:var(--color-text-1)">Intraday Report</div>
+    <div class="text-sm text-muted mt-1">Live call stats by campaign for today</div>
+  </a>
+
+  <a href="{% url 'reports:agents' %}" class="card" style="padding:20px;text-decoration:none;
+     transition:border-color 150ms;display:block" onmouseover="this.style.borderColor='var(--color-accent)'"
+     onmouseout="this.style.borderColor=''">
+    <div style="font-size:24px;color:var(--color-success);margin-bottom:10px">
+      <i class="fa-solid fa-users"></i>
+    </div>
+    <div style="font-size:15px;font-weight:600;color:var(--color-text-1)">Agent Performance</div>
+    <div class="text-sm text-muted mt-1">Calls, talk time, and answered rate per agent</div>
+  </a>
+
+  <a href="{% url 'reports:campaigns' %}" class="card" style="padding:20px;text-decoration:none;
+     transition:border-color 150ms;display:block" onmouseover="this.style.borderColor='var(--color-accent)'"
+     onmouseout="this.style.borderColor=''">
+    <div style="font-size:24px;color:var(--color-warning);margin-bottom:10px">
+      <i class="fa-solid fa-bullhorn"></i>
+    </div>
+    <div style="font-size:15px;font-weight:600;color:var(--color-text-1)">Campaign History</div>
+    <div class="text-sm text-muted mt-1">Daily snapshots for any date range</div>
+  </a>
+</div>
+
+<!-- Quick today summary (loads via API) -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Today at a Glance</span>
+    <span class="text-sm text-muted" id="glancets"></span>
+  </div>
+  <div class="card-body">
+    <div class="stat-grid stat-grid-4" id="glanceStats">
+      <div class="stat-card"><div class="stat-label">Total Calls</div><div class="stat-value" id="gTotal">—</div></div>
+      <div class="stat-card"><div class="stat-label">Answered</div><div class="stat-value" id="gAnswered">—</div></div>
+      <div class="stat-card"><div class="stat-label">Dropped</div><div class="stat-value" id="gDropped">—</div></div>
+      <div class="stat-card"><div class="stat-label">Avg Talk</div><div class="stat-value" id="gAvgTalk">—</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(async () => {
+  try {
+    const d = await DF.get('{% url "calls:stats_api" %}');
+    document.getElementById('gTotal').textContent   = d.total    || 0;
+    document.getElementById('gAnswered').textContent= d.answered || 0;
+    document.getElementById('gDropped').textContent = d.dropped  || 0;
+    document.getElementById('gAvgTalk').textContent = DF.formatDuration(Math.round(d.avg_dur || 0));
+    document.getElementById('glancets').textContent = new Date().toLocaleTimeString();
+  } catch(e) {}
+})();
+</script>
+{% endblock %}

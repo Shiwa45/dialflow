@@ -1,0 +1,61 @@
+{% extends "base/base.html" %}
+{% block title %}Agent Report — DialFlow Pro{% endblock %}
+{% block nav_reports %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Agent Performance</div>
+    <div class="page-subtitle">{{ today|date:"l, d F Y" }}</div>
+  </div>
+  <a href="{% url 'reports:home' %}" class="btn btn-secondary">
+    <i class="fa-solid fa-arrow-left"></i> Back
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Total Calls</th>
+          <th>Answered</th>
+          <th>Answer Rate</th>
+          <th>Total Talk</th>
+          <th>Avg Talk</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% with total=row.total|default:0 answered=row.answered|default:0 talk=row.talk_sec|default:0 %}
+        <tr>
+          <td style="font-weight:500">{{ row.agent.get_full_name|default:row.agent.username }}</td>
+          <td class="text-mono">{{ total }}</td>
+          <td class="text-mono">{{ answered }}</td>
+          <td class="text-mono">
+            {% if total %}{% widthratio answered total 100 %}%{% else %}—{% endif %}
+          </td>
+          <td class="text-mono">{{ talk|floatformat:0|default:0 }}s</td>
+          <td class="text-mono">
+            {% if answered and talk %}{{ talk|floatformat:0|divisibleby:answered }}{% else %}—{% endif %}
+          </td>
+          <td>
+            {% with st=row.agent.agent_status %}
+            {% if st %}<span class="badge badge-{{ st.status }}">{{ st.get_status_display }}</span>
+            {% else %}<span class="badge badge-offline">Offline</span>{% endif %}
+            {% endwith %}
+          </td>
+        </tr>
+        {% endwith %}
+        {% empty %}
+        <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--color-text-3)">
+          No agent data for today.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

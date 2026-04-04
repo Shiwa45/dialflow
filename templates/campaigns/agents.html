@@ -1,0 +1,155 @@
+{% extends "base/base.html" %}
+{% block title %}{{ campaign.name }} — Agents — DialFlow Pro{% endblock %}
+{% block nav_campaigns %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Agent Assignment</div>
+    <div class="page-subtitle">{{ campaign.name }}</div>
+  </div>
+  <a href="{% url 'campaigns:detail' campaign.pk %}" class="btn btn-secondary">
+    <i class="fa-solid fa-arrow-left"></i> Back to Campaign
+  </a>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+
+  <!-- Assigned agents -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Assigned Agents</span>
+      <span class="badge badge-active">{{ assigned|length }}</span>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr><th>Agent</th><th>Status</th><th>Since</th><th></th></tr>
+        </thead>
+        <tbody id="assignedBody">
+          {% for ca in assigned %}
+          <tr id="row-{{ ca.agent.pk }}">
+            <td style="font-weight:500">
+              {{ ca.agent.get_full_name|default:ca.agent.username }}
+              <div class="text-sm text-muted">{{ ca.agent.username }}</div>
+            </td>
+            <td>
+              {% with st=ca.agent.agent_status %}
+                {% if st %}<span class="badge badge-{{ st.status }}">{{ st.get_status_display }}</span>
+                {% else %}<span class="badge badge-offline">Offline</span>{% endif %}
+              {% endwith %}
+            </td>
+            <td class="text-sm text-muted">{{ ca.joined_at|date:"d M" }}</td>
+            <td>
+              {% if ca.is_active %}
+              <button class="btn btn-danger btn-sm btn-icon" title="Remove"
+                      onclick="unassign({{ ca.agent.pk }}, '{{ ca.agent.get_full_name|default:ca.agent.username|escapejs }}')">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+              {% else %}
+              <span class="badge badge-offline" style="font-size:10px">Inactive</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr id="emptyRow">
+            <td colspan="4" style="text-align:center;padding:32px;color:var(--color-text-3)">
+              No agents assigned yet.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Available agents -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Available Agents</span>
+      <span class="text-sm text-muted">Click to assign</span>
+    </div>
+    <div style="padding:12px 16px;border-bottom:1px solid var(--color-border)">
+      <input class="form-input" id="agentSearch" placeholder="Search agents…"
+             oninput="filterAvailable()" style="font-size:13px">
+    </div>
+    <div class="table-wrap" style="max-height:480px;overflow-y:auto">
+      <table class="table" id="availableTable">
+        <thead>
+          <tr><th>Agent</th><th>Phone Ext</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for agent in available_agents %}
+          <tr class="available-row" data-name="{{ agent.get_full_name|lower }} {{ agent.username|lower }}">
+            <td>
+              <div style="font-weight:500">{{ agent.get_full_name|default:agent.username }}</div>
+              <div class="text-sm text-muted">{{ agent.username }}</div>
+            </td>
+            <td class="text-mono text-sm">
+              {% if agent.phone %}{{ agent.phone.extension }}{% else %}—{% endif %}
+            </td>
+            <td>
+              <button class="btn btn-primary btn-sm" onclick="assign({{ agent.pk }}, this)">
+                <i class="fa-solid fa-plus"></i> Assign
+              </button>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="3" style="text-align:center;padding:32px;color:var(--color-text-3)">
+              All agents are already assigned.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+
+function filterAvailable() {
+  const q = document.getElementById('agentSearch').value.toLowerCase();
+  document.querySelectorAll('.available-row').forEach(row => {
+    row.style.display = row.dataset.name.includes(q) ? '' : 'none';
+  });
+}
+
+async function assign(agentId, btn) {
+  btn.disabled = true;
+  const res  = await fetch('{% url "campaigns:agent_assign" campaign.pk %}', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
+    body: `agent_id=${agentId}`,
+  });
+  const data = await res.json();
+  if (data.success) {
+    // Remove from available table
+    btn.closest('tr').remove();
+    DF.toast('Agent assigned', 'success');
+    // Reload to show in assigned list
+    setTimeout(() => location.reload(), 600);
+  } else {
+    btn.disabled = false;
+    DF.toast(data.error || 'Failed', 'error');
+  }
+}
+
+async function unassign(agentId, name) {
+  if (!confirm(`Remove ${name} from this campaign?`)) return;
+  const res  = await fetch('{% url "campaigns:agent_unassign" campaign.pk %}', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
+    body: `agent_id=${agentId}`,
+  });
+  const data = await res.json();
+  if (data.success) {
+    const row = document.getElementById(`row-${agentId}`);
+    if (row) row.remove();
+    DF.toast(`${name} removed`, 'info');
+  }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,191 @@
+{% extends "base/base.html" %}
+{% block title %}DNC List — DialFlow Pro{% endblock %}
+{% block nav_campaigns %}active{% endblock %}
+
+{% block topbar_right %}
+<button class="btn btn-secondary btn-sm" onclick="document.getElementById('importDncModal').classList.add('visible')">
+  <i class="fa-solid fa-upload"></i> Import CSV
+</button>
+<button class="btn btn-danger btn-sm" onclick="document.getElementById('addDncModal').classList.add('visible')">
+  <i class="fa-solid fa-ban"></i> Add to DNC
+</button>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Do Not Call List</div>
+    <div class="page-subtitle">{{ entries|length }} entries (showing last 500)</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Phone Number</th>
+          <th>Scope</th>
+          <th>Reason</th>
+          <th>Added By</th>
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in entries %}
+        <tr>
+          <td class="text-mono" style="font-weight:500">{{ entry.phone_number }}</td>
+          <td>
+            {% if entry.campaign %}
+            <span class="badge" style="background:var(--color-info-lt);color:#1E40AF">
+              {{ entry.campaign.name }}
+            </span>
+            {% else %}
+            <span class="badge badge-offline">System-wide</span>
+            {% endif %}
+          </td>
+          <td class="text-sm text-muted">{{ entry.reason|default:"—" }}</td>
+          <td class="text-sm">{{ entry.added_by.username|default:"System" }}</td>
+          <td class="text-sm text-muted">{{ entry.created_at|date:"d M Y H:i" }}</td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="5" style="text-align:center;padding:40px;color:var(--color-text-3)">
+            No DNC entries yet.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add DNC Modal -->
+<div class="disposition-overlay" id="addDncModal">
+  <div class="disposition-modal" style="width:380px">
+    <div class="disposition-title">Add to DNC List</div>
+    <div class="disposition-subtitle">Phone number will be blocked from all future calls</div>
+
+    <div class="form-group">
+      <label class="form-label">Phone Number *</label>
+      <input class="form-input" id="dncPhone" placeholder="+91XXXXXXXXXX">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Scope</label>
+      <select class="form-input" id="dncCampaign">
+        <option value="">System-wide (all campaigns)</option>
+        {% for c in campaigns %}
+        <option value="{{ c.id }}">{{ c.name }} only</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Reason</label>
+      <input class="form-input" id="dncReason" placeholder="Optional reason">
+    </div>
+
+    <div style="display:flex;gap:10px;margin-top:8px">
+      <button class="btn btn-danger" onclick="addDNC()">
+        <i class="fa-solid fa-ban"></i> Add to DNC
+      </button>
+      <button class="btn btn-secondary" onclick="document.getElementById('addDncModal').classList.remove('visible')">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('addDncModal').addEventListener('click', function(e) {
+  if (e.target === this) this.classList.remove('visible');
+});
+
+const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+
+async function addDNC() {
+  const phone = document.getElementById('dncPhone').value.trim();
+  if (!phone) { DF.toast('Phone number required', 'warning'); return; }
+
+  const form = new URLSearchParams({
+    phone_number: phone,
+    campaign_id:  document.getElementById('dncCampaign').value,
+    reason:       document.getElementById('dncReason').value,
+  });
+
+  const res  = await fetch('{% url "campaigns:dnc_add" %}', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
+    body: form.toString(),
+  });
+  const data = await res.json();
+  if (data.success) {
+    DF.toast(data.created ? `${phone} added to DNC` : `${phone} already on DNC`, data.created ? 'success' : 'info');
+    document.getElementById('addDncModal').classList.remove('visible');
+    if (data.created) setTimeout(() => location.reload(), 800);
+  }
+}
+</script>
+{% endblock %}
+
+<!-- DNC CSV Import Modal -->
+<div class="disposition-overlay" id="importDncModal">
+  <div class="disposition-modal" style="width:400px">
+    <div class="disposition-title">Import DNC Numbers</div>
+    <div class="disposition-subtitle">One phone number per line, or CSV with phone as first column</div>
+
+    <div class="form-group">
+      <label class="form-label">Scope</label>
+      <select class="form-input" id="importDncCampaign">
+        <option value="">System-wide (all campaigns)</option>
+        {% for c in campaigns %}
+        <option value="{{ c.id }}">{{ c.name }} only</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">File (.csv or .txt)</label>
+      <input type="file" class="form-input" id="importDncFile" accept=".csv,.txt">
+    </div>
+    <div id="importDncResult" style="display:none" class="mt-2"></div>
+    <div style="display:flex;gap:10px;margin-top:8px">
+      <button class="btn btn-danger" onclick="importDncCsv()">
+        <i class="fa-solid fa-upload"></i> Import
+      </button>
+      <button class="btn btn-secondary" onclick="document.getElementById('importDncModal').classList.remove('visible')">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('importDncModal').addEventListener('click', function(e) {
+  if (e.target === this) this.classList.remove('visible');
+});
+
+async function importDncCsv() {
+  const file   = document.getElementById('importDncFile').files[0];
+  const campId = document.getElementById('importDncCampaign').value;
+  if (!file) { DF.toast('Select a file first', 'warning'); return; }
+
+  const form = new FormData();
+  form.append('file', file);
+  if (campId) form.append('campaign_id', campId);
+
+  const importUrl = '/campaigns/dnc/import/';
+  const res = await fetch(importUrl, {
+    method: 'POST',
+    headers: { 'X-CSRFToken': document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '' },
+    body: form,
+  });
+  const data = await res.json();
+  const el = document.getElementById('importDncResult');
+  el.style.display = '';
+  if (data.success) {
+    el.innerHTML = '<div class="toast toast-success"><i class="fa-solid fa-circle-check"></i> Added ' + data.added + ', skipped ' + data.skipped + '</div>';
+    setTimeout(() => location.reload(), 1200);
+  } else {
+    el.innerHTML = '<div class="toast toast-error"><i class="fa-solid fa-circle-xmark"></i> ' + data.error + '</div>';
+  }
+}
+</script>

@@ -1,0 +1,63 @@
+{% extends "base/base.html" %}
+{% block title %}{{ server.name }} — DialFlow Pro{% endblock %}
+{% block nav_telephony %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">{{ server.name }}</div>
+    <div class="page-subtitle">
+      {{ server.server_ip }}
+      <span class="badge badge-{{ server.connection_status }}" style="margin-left:8px">
+        {{ server.get_connection_status_display }}
+      </span>
+    </div>
+  </div>
+  <a href="{% url 'telephony:server_list' %}" class="btn btn-secondary">
+    <i class="fa-solid fa-arrow-left"></i> Back
+  </a>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <div class="card">
+    <div class="card-header"><span class="card-title">ARI Configuration</span></div>
+    <div class="card-body" style="padding:12px">
+      <div class="lead-field"><span class="lead-field-label">Host</span><span class="text-mono">{{ server.ari_host }}:{{ server.ari_port }}</span></div>
+      <div class="lead-field"><span class="lead-field-label">Username</span><span class="text-mono">{{ server.ari_username }}</span></div>
+      <div class="lead-field"><span class="lead-field-label">App Name</span><span class="text-mono">{{ server.ari_app_name }}</span></div>
+      <div class="lead-field"><span class="lead-field-label">Last Connected</span><span>{{ server.last_connected|date:"d M H:i"|default:"Never" }}</span></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">AMI Configuration</span></div>
+    <div class="card-body" style="padding:12px">
+      <div class="lead-field"><span class="lead-field-label">Host</span><span class="text-mono">{{ server.ami_host }}:{{ server.ami_port }}</span></div>
+      <div class="lead-field"><span class="lead-field-label">Username</span><span class="text-mono">{{ server.ami_username }}</span></div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:16px">
+  <div class="card">
+    <div class="card-header"><span class="card-title">Registered Extensions</span></div>
+    <div class="table-wrap">
+      <table class="table table-sm">
+        <thead><tr><th>Extension</th><th>Name</th><th>Type</th><th>Agent</th><th>Active</th></tr></thead>
+        <tbody>
+          {% for phone in server.phones.all %}
+          <tr>
+            <td class="text-mono">{{ phone.extension }}</td>
+            <td>{{ phone.name }}</td>
+            <td>{{ phone.get_phone_type_display }}</td>
+            <td>{{ phone.user.username|default:"—" }}</td>
+            <td>{% if phone.is_active %}✓{% else %}—{% endif %}</td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5" style="text-align:center;padding:24px;color:var(--color-text-3)">No extensions on this server.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

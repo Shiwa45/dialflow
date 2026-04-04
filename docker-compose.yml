@@ -1,0 +1,102 @@
+version: '3.9'
+
+# DialFlow Pro — Docker Compose (development)
+# Usage: docker-compose up -d
+# Then:  docker-compose exec web python manage.py migrate
+#        docker-compose exec web python manage.py createsuperuser
+#        docker-compose exec web python manage.py setup_initial_data
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       dialflow_db
+      POSTGRES_USER:     dialflow_user
+      POSTGRES_PASSWORD: dialflow_pass
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dialflow_user -d dialflow_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Django / Daphne (ASGI) ───────────────────────────────────────────────────
+  web:
+    build: .
+    restart: unless-stopped
+    command: daphne -b 0.0.0.0 -p 8000 dialflow.asgi:application
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      DB_HOST:              db
+      DB_PORT:              "5432"
+      REDIS_URL:            redis://redis:6379/0
+      CELERY_BROKER_URL:    redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    volumes:
+      - .:/app
+      - media_data:/app/media
+      - static_data:/app/staticfiles
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  # ── Celery Worker ─────────────────────────────────────────────────────────────
+  worker:
+    build: .
+    restart: unless-stopped
+    command: celery -A dialflow worker -l info --concurrency=4
+    env_file: .env
+    environment:
+      DB_HOST:              db
+      REDIS_URL:            redis://redis:6379/0
+      CELERY_BROKER_URL:    redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    volumes:
+      - .:/app
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  # ── Celery Beat ───────────────────────────────────────────────────────────────
+  beat:
+    build: .
+    restart: unless-stopped
+    command: celery -A dialflow beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    env_file: .env
+    environment:
+      DB_HOST:              db
+      REDIS_URL:            redis://redis:6379/0
+      CELERY_BROKER_URL:    redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    volumes:
+      - .:/app
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+      web:   { condition: service_started }  # Beat needs DB schema to exist
+
+volumes:
+  pg_data:
+  media_data:
+  static_data:

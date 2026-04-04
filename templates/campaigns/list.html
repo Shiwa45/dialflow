@@ -1,0 +1,103 @@
+{% extends "base/base.html" %}
+{% block title %}Campaigns — DialFlow Pro{% endblock %}
+{% block nav_campaigns %}active{% endblock %}
+
+{% block topbar_right %}
+<a href="{% url 'campaigns:create' %}" class="btn btn-primary btn-sm">
+  <i class="fa-solid fa-plus"></i> New Campaign
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Campaigns</div>
+    <div class="page-subtitle">{{ campaigns|length }} total</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Campaign</th>
+          <th>Status</th>
+          <th>Mode</th>
+          <th>Agents</th>
+          <th>Calls Today</th>
+          <th>Answered</th>
+          <th>Abandon %</th>
+          <th>Controls</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in campaigns %}
+        <tr>
+          <td>
+            <a href="{% url 'campaigns:detail' c.pk %}" style="font-weight:500">{{ c.name }}</a>
+            {% if c.asterisk_server %}<div class="text-sm text-muted">{{ c.asterisk_server.name }}</div>{% endif %}
+          </td>
+          <td><span class="badge badge-{{ c.status }}">{{ c.get_status_display }}</span></td>
+          <td class="text-sm">{{ c.get_dial_mode_display }}</td>
+          <td class="text-mono" id="camp-agents-{{ c.pk }}">{{ c.stat_agents_active }}</td>
+          <td class="text-mono" id="camp-calls-{{ c.pk }}">{{ c.stat_calls_today }}</td>
+          <td class="text-mono" id="camp-answered-{{ c.pk }}">{{ c.stat_answered_today }}</td>
+          <td class="text-mono" id="camp-abandon-{{ c.pk }}">{{ c.stat_abandon_rate|floatformat:1 }}%</td>
+          <td>
+            <div style="display:flex;gap:6px">
+              {% if c.status != 'active' %}
+              <button class="btn btn-success btn-sm btn-icon" title="Start"
+                onclick="ctrl({{ c.pk }},'start')"><i class="fa-solid fa-play"></i></button>
+              {% endif %}
+              {% if c.status == 'active' %}
+              <button class="btn btn-secondary btn-sm btn-icon" title="Pause"
+                onclick="ctrl({{ c.pk }},'pause')"><i class="fa-solid fa-pause"></i></button>
+              {% endif %}
+              {% if c.status != 'stopped' %}
+              <button class="btn btn-danger btn-sm btn-icon" title="Stop"
+                onclick="ctrl({{ c.pk }},'stop')"><i class="fa-solid fa-stop"></i></button>
+              {% endif %}
+              <a href="{% url 'campaigns:edit' c.pk %}" class="btn btn-secondary btn-sm btn-icon" title="Edit">
+                <i class="fa-solid fa-pen"></i>
+              </a>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" style="text-align:center;padding:40px;color:var(--color-text-3)">
+          No campaigns yet. <a href="{% url 'campaigns:create' %}">Create one</a>.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+
+async function ctrl(id, action) {
+  const res  = await fetch(`/campaigns/${id}/control/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
+    body:    `action=${action}`,
+  });
+  if ((await res.json()).success) location.reload();
+}
+
+// Live stats via supervisor WS
+const ws = new ReconnectingWS('/ws/supervisor/', {
+  onmessage(data) {
+    if (data.type === 'campaign_stats') {
+      const id = data.campaign_id;
+      const set = (sfx, val) => { const el = document.getElementById(`camp-${sfx}-${id}`); if (el) el.textContent = val; };
+      set('calls',    data.calls_today);
+      set('answered', data.answered);
+      set('abandon',  parseFloat(data.abandon_rate).toFixed(1) + '%');
+      set('agents',   data.agents_active);
+    }
+  }
+});
+</script>
+{% endblock %}
