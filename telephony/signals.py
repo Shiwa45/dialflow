@@ -2,7 +2,7 @@
 import logging
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
-from .models import Phone
+from .models import Phone, Carrier
 
 logger = logging.getLogger('dialflow')
 
@@ -37,3 +37,37 @@ def remove_phone_from_asterisk(sender, instance, **kwargs):
         logger.info(f'Phone {instance.extension} removed from Asterisk realtime (deleted).')
     except Exception as e:
         logger.error(f'Failed to remove phone {instance.extension} on delete: {e}')
+
+
+# ─── Carrier signals ──────────────────────────────────────────────────────────
+
+@receiver(post_save, sender=Carrier)
+def sync_carrier_to_asterisk(sender, instance, **kwargs):
+    """
+    Every time a Carrier is saved, write its PJSIP trunk rows
+    (ps_endpoints / ps_auths / ps_aors / ps_contacts) so Asterisk
+    picks it up immediately via ODBC — no reload needed.
+    """
+    if instance.is_active:
+        try:
+            instance.sync_to_asterisk()
+            logger.info(f'Carrier {instance.name} ({instance.endpoint_id}) synced to Asterisk.')
+        except Exception as e:
+            logger.error(f'Failed to sync carrier {instance.name} to Asterisk: {e}')
+    else:
+        try:
+            instance.remove_from_asterisk()
+            logger.info(f'Carrier {instance.name} removed from Asterisk (deactivated).')
+        except Exception as e:
+            logger.error(f'Failed to remove carrier {instance.name} from Asterisk: {e}')
+
+
+@receiver(post_delete, sender=Carrier)
+def remove_carrier_from_asterisk(sender, instance, **kwargs):
+    """Remove PJSIP trunk rows when a Carrier is deleted."""
+    try:
+        instance.remove_from_asterisk()
+        logger.info(f'Carrier {instance.name} removed from Asterisk (deleted).')
+    except Exception as e:
+        logger.error(f'Failed to remove carrier {instance.name} on delete: {e}')
+
