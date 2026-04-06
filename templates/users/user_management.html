@@ -1,0 +1,352 @@
+{% extends "base/base.html" %}
+{% block title %}User Management — DialFlow Pro{% endblock %}
+{% block nav_users %}active{% endblock %}
+
+{% block topbar_right %}
+<button class="btn btn-primary btn-sm" onclick="document.getElementById('createUserModal').classList.add('visible')">
+  <i class="fa-solid fa-plus"></i> Add User
+</button>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">User Management</div>
+    <div class="page-subtitle">{{ total_users }} total · {{ active_users }} active</div>
+  </div>
+</div>
+
+<!-- Stats row -->
+<div class="stat-grid grid-4 mb-6">
+  <div class="stat-card">
+    <label>Total Users</label>
+    <strong>{{ total_users }}</strong>
+  </div>
+  <div class="stat-card">
+    <label>Agents</label>
+    <strong>{{ agent_count }}</strong>
+  </div>
+  <div class="stat-card">
+    <label>Supervisors</label>
+    <strong>{{ supervisor_count }}</strong>
+  </div>
+  <div class="stat-card">
+    <label>Online Now</label>
+    <strong style="color:var(--success)">{{ online_count }}</strong>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4">
+  <div class="card-body" style="padding:12px">
+    <form method="get" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input class="form-input" name="q" value="{{ request.GET.q }}" placeholder="Search name / username…" style="width:220px">
+      <select class="form-input" name="role" style="width:150px">
+        <option value="">All roles</option>
+        <option value="agent" {% if request.GET.role == 'agent' %}selected{% endif %}>Agents</option>
+        <option value="supervisor" {% if request.GET.role == 'supervisor' %}selected{% endif %}>Supervisors</option>
+        <option value="admin" {% if request.GET.role == 'admin' %}selected{% endif %}>Admins</option>
+      </select>
+      <select class="form-input" name="status" style="width:140px">
+        <option value="">All statuses</option>
+        <option value="active" {% if request.GET.status == 'active' %}selected{% endif %}>Active</option>
+        <option value="inactive" {% if request.GET.status == 'inactive' %}selected{% endif %}>Inactive</option>
+        <option value="online" {% if request.GET.status == 'online' %}selected{% endif %}>Online now</option>
+      </select>
+      <button type="submit" class="btn btn-secondary">Filter</button>
+      <a href="?" class="btn btn-ghost">Clear</a>
+    </form>
+  </div>
+</div>
+
+<!-- User table -->
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Extension</th>
+          <th>Campaign</th>
+          <th>Today</th>
+          <th>Last Login</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr id="user-row-{{ u.pk }}">
+          <td>
+            <div style="display:flex;align-items:center;gap:10px">
+              <div class="user-avatar" style="width:32px;height:32px;font-size:12px">
+                {{ u.first_name.0|default:u.username.0|upper }}
+              </div>
+              <div>
+                <div style="font-weight:600;font-size:13.5px">{{ u.get_full_name|default:u.username }}</div>
+                <div class="text-sm text-muted">{{ u.username }} · {{ u.email|default:"no email" }}</div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <span class="badge badge-{{ u.role }}">{{ u.get_role_display }}</span>
+          </td>
+          <td>
+            {% if not u.is_active %}
+              <span class="badge badge-stopped">Inactive</span>
+            {% elif u.agent_status %}
+              <span class="badge badge-{{ u.agent_status.status }}">
+                <div class="status-dot {{ u.agent_status.status }}" style="width:6px;height:6px"></div>
+                {{ u.agent_status.get_status_display }}
+              </span>
+            {% else %}
+              <span class="badge badge-offline">Offline</span>
+            {% endif %}
+          </td>
+          <td class="text-mono text-sm">
+            {{ u.phone.extension|default:"—" }}
+          </td>
+          <td class="text-sm">
+            {% if u.agent_status and u.agent_status.active_campaign %}
+              {{ u.agent_status.active_campaign.name|truncatechars:20 }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-mono text-sm">
+            {% if u.agent_status %}
+              {{ u.agent_status.calls_today }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-sm text-muted">{{ u.last_login|date:"d M H:i"|default:"Never" }}</td>
+          <td>
+            <div style="display:flex;gap:4px">
+              <button class="btn btn-ghost btn-sm btn-icon" title="Edit"
+                      onclick="openEditModal({{ u.pk }}, '{{ u.username }}', '{{ u.first_name|escapejs }}', '{{ u.last_name|escapejs }}', '{{ u.email }}', '{{ u.role }}')">
+                <i class="fa-solid fa-pen"></i>
+              </button>
+              <button class="btn btn-ghost btn-sm btn-icon" title="Reset password"
+                      onclick="resetPassword({{ u.pk }}, '{{ u.username }}')">
+                <i class="fa-solid fa-key"></i>
+              </button>
+              {% if u.is_active %}
+              <button class="btn btn-ghost btn-sm btn-icon" title="Deactivate"
+                      style="color:var(--danger)"
+                      onclick="toggleUser({{ u.pk }}, false, '{{ u.username }}')">
+                <i class="fa-solid fa-ban"></i>
+              </button>
+              {% else %}
+              <button class="btn btn-ghost btn-sm btn-icon" title="Activate"
+                      style="color:var(--success)"
+                      onclick="toggleUser({{ u.pk }}, true, '{{ u.username }}')">
+                <i class="fa-solid fa-circle-check"></i>
+              </button>
+              {% endif %}
+              {% if u.agent_status and u.agent_status.status != 'offline' %}
+              <button class="btn btn-ghost btn-sm btn-icon" title="Force offline"
+                      onclick="forceLogout({{ u.pk }}, '{{ u.username }}')">
+                <i class="fa-solid fa-right-from-bracket"></i>
+              </button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="8" style="text-align:center;padding:48px;color:var(--text-muted)">
+            No users found.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if page.has_other_pages %}
+  <div style="padding:14px 16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+    <span class="text-sm text-muted">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+    <div style="display:flex;gap:4px">
+      {% if page.has_previous %}<a href="?page={{ page.previous_page_number }}" class="btn btn-secondary btn-sm">Prev</a>{% endif %}
+      {% if page.has_next %}<a href="?page={{ page.next_page_number }}" class="btn btn-secondary btn-sm">Next</a>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Create User Modal -->
+<div class="disposition-overlay" id="createUserModal">
+  <div class="disposition-modal" style="width:480px">
+    <div style="font-size:1.1rem;font-weight:800;margin-bottom:4px">Create New User</div>
+    <div style="font-size:.78rem;color:var(--text-muted);margin-bottom:20px">Add a new agent, supervisor, or admin</div>
+
+    <div class="form-group">
+      <label class="form-label">Username *</label>
+      <input class="form-input" id="cu-username" placeholder="jsmith">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group">
+        <label class="form-label">First Name</label>
+        <input class="form-input" id="cu-firstname" placeholder="John">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Last Name</label>
+        <input class="form-input" id="cu-lastname" placeholder="Smith">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input class="form-input" id="cu-email" type="email" placeholder="john@company.com">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Role *</label>
+      <select class="form-input" id="cu-role">
+        <option value="agent">Agent</option>
+        <option value="supervisor">Supervisor</option>
+        <option value="admin">Admin</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Password *</label>
+      <input class="form-input" id="cu-password" type="password" placeholder="Minimum 8 characters">
+    </div>
+    <div id="cu-error" style="display:none;color:var(--danger);font-size:12.5px;margin-bottom:10px"></div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-primary" onclick="createUser()">
+        <i class="fa-solid fa-plus"></i> Create User
+      </button>
+      <button class="btn btn-secondary" onclick="document.getElementById('createUserModal').classList.remove('visible')">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit User Modal -->
+<div class="disposition-overlay" id="editUserModal">
+  <div class="disposition-modal" style="width:480px">
+    <div style="font-size:1.1rem;font-weight:800;margin-bottom:20px">Edit User</div>
+    <input type="hidden" id="eu-pk">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group">
+        <label class="form-label">First Name</label>
+        <input class="form-input" id="eu-firstname">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Last Name</label>
+        <input class="form-input" id="eu-lastname">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input class="form-input" id="eu-email" type="email">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Role</label>
+      <select class="form-input" id="eu-role">
+        <option value="agent">Agent</option>
+        <option value="supervisor">Supervisor</option>
+        <option value="admin">Admin</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-primary" onclick="saveEdit()"><i class="fa-solid fa-floppy-disk"></i> Save</button>
+      <button class="btn btn-secondary" onclick="document.getElementById('editUserModal').classList.remove('visible')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+
+async function apiPost(url, data) {
+  const res  = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':csrf}, body:JSON.stringify(data) });
+  return res.json();
+}
+
+// Close modals on backdrop click
+['createUserModal','editUserModal'].forEach(id => {
+  document.getElementById(id).addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('visible');
+  });
+});
+
+async function createUser() {
+  const errEl = document.getElementById('cu-error');
+  errEl.style.display = 'none';
+  const data = {
+    username:   document.getElementById('cu-username').value.trim(),
+    first_name: document.getElementById('cu-firstname').value.trim(),
+    last_name:  document.getElementById('cu-lastname').value.trim(),
+    email:      document.getElementById('cu-email').value.trim(),
+    role:       document.getElementById('cu-role').value,
+    password:   document.getElementById('cu-password').value,
+  };
+  if (!data.username || !data.password) {
+    errEl.textContent = 'Username and password are required.';
+    errEl.style.display = 'block';
+    return;
+  }
+  const result = await apiPost('{% url "users:user_create" %}', data);
+  if (result.success) {
+    DF.toast(`User ${data.username} created`, 'success');
+    document.getElementById('createUserModal').classList.remove('visible');
+    setTimeout(() => location.reload(), 600);
+  } else {
+    errEl.textContent = result.error || 'Failed to create user.';
+    errEl.style.display = 'block';
+  }
+}
+
+function openEditModal(pk, username, fn, ln, email, role) {
+  document.getElementById('eu-pk').value        = pk;
+  document.getElementById('eu-firstname').value = fn;
+  document.getElementById('eu-lastname').value  = ln;
+  document.getElementById('eu-email').value     = email;
+  document.getElementById('eu-role').value      = role;
+  document.getElementById('editUserModal').classList.add('visible');
+}
+
+async function saveEdit() {
+  const pk   = document.getElementById('eu-pk').value;
+  const data = {
+    first_name: document.getElementById('eu-firstname').value,
+    last_name:  document.getElementById('eu-lastname').value,
+    email:      document.getElementById('eu-email').value,
+    role:       document.getElementById('eu-role').value,
+  };
+  const result = await apiPost(`/users/api/${pk}/edit/`, data);
+  if (result.success) {
+    DF.toast('User updated', 'success');
+    document.getElementById('editUserModal').classList.remove('visible');
+    setTimeout(() => location.reload(), 600);
+  } else {
+    DF.toast(result.error || 'Update failed', 'error');
+  }
+}
+
+async function toggleUser(pk, activate, username) {
+  const action = activate ? 'activate' : 'deactivate';
+  if (!activate && !confirm(`Deactivate ${username}? They will be logged out.`)) return;
+  const result = await apiPost(`/users/api/${pk}/toggle/`, { activate });
+  if (result.success) {
+    DF.toast(`${username} ${action}d`, activate ? 'success' : 'info');
+    setTimeout(() => location.reload(), 600);
+  } else {
+    DF.toast(result.error || 'Failed', 'error');
+  }
+}
+
+async function resetPassword(pk, username) {
+  const pw = prompt(`Set new password for ${username} (min 8 chars):`);
+  if (!pw || pw.length < 8) { DF.toast('Password too short', 'warning'); return; }
+  const result = await apiPost(`/users/api/${pk}/reset-password/`, { password: pw });
+  DF.toast(result.success ? `Password reset for ${username}` : (result.error || 'Failed'),
+           result.success ? 'success' : 'error');
+}
+
+async function forceLogout(pk, username) {
+  if (!confirm(`Force ${username} offline?`)) return;
+  const result = await apiPost(`/agents/api/force-logout/${pk}/`, {});
+  DF.toast(result.success ? `${username} logged out` : (result.error || 'Failed'),
+           result.success ? 'info' : 'error');
+}
+</script>
+{% endblock %}

@@ -1,0 +1,239 @@
+{% extends "base/base.html" %}
+{% block title %}Recycle Leads — DialFlow Pro{% endblock %}
+{% block nav_leads %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Lead Recycling</div>
+    <div class="page-subtitle">Re-queue leads for another attempt</div>
+  </div>
+  <a href="{% url 'leads:list' %}" class="btn btn-secondary">
+    <i class="fa-solid fa-arrow-left"></i> Back to Leads
+  </a>
+</div>
+
+<!-- Quick stats -->
+<div class="stat-grid grid-4 mb-6">
+  <div class="stat-card">
+    <label>No Answer</label>
+    <strong>{{ stats.no_answer }}</strong>
+  </div>
+  <div class="stat-card">
+    <label>Busy</label>
+    <strong>{{ stats.busy }}</strong>
+  </div>
+  <div class="stat-card">
+    <label>Voicemail</label>
+    <strong>{{ stats.voicemail }}</strong>
+  </div>
+  <div class="stat-card">
+    <label>Failed / Error</label>
+    <strong>{{ stats.failed }}</strong>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 360px;gap:16px">
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Leads Ready to Recycle</span>
+      <span class="badge badge-active">{{ recyclable|length }} eligible</span>
+    </div>
+
+    <!-- Filters -->
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select class="form-input" id="recycleFilter" style="width:160px" onchange="applyFilter()">
+        <option value="all">All outcomes</option>
+        <option value="no_answer">No Answer</option>
+        <option value="busy">Busy</option>
+        <option value="voicemail">Voicemail</option>
+        <option value="no_answer,busy,voicemail">No Answer + Busy + VM</option>
+      </select>
+      <select class="form-input" id="recycleCampaign" style="width:180px" onchange="applyFilter()">
+        <option value="">All campaigns</option>
+        {% for c in campaigns %}
+        <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+      <input class="form-input" id="recycleSearch" placeholder="Search phone / name…" style="width:200px" oninput="applyFilter()">
+    </div>
+
+    <div class="table-wrap">
+      <table class="table" id="recycleTable">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>
+            <th>Lead</th>
+            <th>Phone</th>
+            <th>Last Outcome</th>
+            <th>Attempts</th>
+            <th>Campaign</th>
+            <th>Last Called</th>
+          </tr>
+        </thead>
+        <tbody id="recycleBody">
+          {% for lead in recyclable %}
+          <tr data-campaign="{{ lead.last_campaign_id }}" data-outcome="{{ lead.last_outcome }}"
+              data-name="{{ lead.full_name|lower }}" data-phone="{{ lead.primary_phone }}">
+            <td><input type="checkbox" class="lead-check" value="{{ lead.pk }}"></td>
+            <td>
+              <a href="{% url 'leads:detail' lead.pk %}" style="font-weight:600">{{ lead.full_name }}</a>
+              {% if lead.do_not_call %}
+              <span class="badge badge-stopped" style="font-size:9px;margin-left:4px">DNC</span>
+              {% endif %}
+            </td>
+            <td class="text-mono text-sm">{{ lead.primary_phone }}</td>
+            <td>
+              <span class="badge badge-{{ lead.last_outcome_class }}">{{ lead.last_outcome|default:"—" }}</span>
+            </td>
+            <td class="text-mono text-sm">{{ lead.attempt_count|default:0 }}</td>
+            <td class="text-sm text-muted">{{ lead.last_campaign|default:"—" }}</td>
+            <td class="text-sm text-muted">{{ lead.last_called|date:"d M H:i"|default:"—" }}</td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="7" style="text-align:center;padding:40px;color:var(--text-muted)">
+              No leads eligible for recycling with current criteria.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Recycle Options</span></div>
+      <div class="card-body">
+        <div class="form-group">
+          <label class="form-label">Target Campaign *</label>
+          <select class="form-input" id="targetCampaign">
+            <option value="">Select campaign…</option>
+            {% for c in campaigns %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Priority</label>
+          <select class="form-input" id="recyclePriority">
+            <option value="5">Normal (5)</option>
+            <option value="8">High (8)</option>
+            <option value="10">Urgent (10)</option>
+            <option value="3">Low (3)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Reset attempt count</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="resetAttempts" checked>
+            <span style="font-size:13px;font-weight:400;color:var(--text-sec)">Reset to 0 (fresh start)</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Wait before redialing</label>
+          <select class="form-input" id="recycleDelay">
+            <option value="0">Immediately</option>
+            <option value="60">1 hour</option>
+            <option value="180">3 hours</option>
+            <option value="1440">24 hours</option>
+          </select>
+        </div>
+
+        <div style="padding:10px;background:var(--bg-sec);border-radius:var(--radius-sm);margin-bottom:14px;font-size:12.5px">
+          <strong id="selectedCount">0</strong> leads selected
+        </div>
+
+        <button class="btn btn-primary w-full" onclick="recycleSelected()">
+          <i class="fa-solid fa-rotate"></i> Recycle Selected Leads
+        </button>
+        <button class="btn btn-secondary w-full mt-2" onclick="selectAllVisible(); recycleSelected(true)">
+          <i class="fa-solid fa-rotate"></i> Recycle All Eligible
+        </button>
+      </div>
+    </div>
+
+    <div class="card mt-4">
+      <div class="card-header"><span class="card-title">Recent Recycle Jobs</span></div>
+      <div class="card-body" id="recentJobs" style="padding:12px">
+        {% if recent_jobs %}
+          {% for job in recent_jobs %}
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:12.5px">
+            <span class="text-muted">{{ job.recycled_at|date:"d M H:i" }}</span>
+            <span><strong>{{ job.count }}</strong> leads → {{ job.campaign }}</span>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="text-muted text-sm">No recent jobs.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleAll(cb) {
+  document.querySelectorAll('.lead-check').forEach(c => c.checked = cb.checked);
+  updateCount();
+}
+
+function updateCount() {
+  const n = document.querySelectorAll('.lead-check:checked').length;
+  document.getElementById('selectedCount').textContent = n;
+}
+
+document.querySelectorAll('.lead-check').forEach(c => c.addEventListener('change', updateCount));
+
+function selectAllVisible() {
+  document.querySelectorAll('#recycleBody tr:not([style*="display:none"]) .lead-check').forEach(c => c.checked = true);
+  updateCount();
+}
+
+function applyFilter() {
+  const filterOutcome = document.getElementById('recycleFilter').value;
+  const filterCampaign = document.getElementById('recycleCampaign').value;
+  const search = document.getElementById('recycleSearch').value.toLowerCase();
+
+  document.querySelectorAll('#recycleBody tr[data-phone]').forEach(row => {
+    const matchOutcome  = filterOutcome === 'all' || filterOutcome.split(',').includes(row.dataset.outcome);
+    const matchCampaign = !filterCampaign || row.dataset.campaign === filterCampaign;
+    const matchSearch   = !search || row.dataset.name.includes(search) || row.dataset.phone.includes(search);
+    row.style.display = (matchOutcome && matchCampaign && matchSearch) ? '' : 'none';
+  });
+}
+
+async function recycleSelected(all = false) {
+  const campaign = document.getElementById('targetCampaign').value;
+  if (!campaign) { DF.toast('Select a target campaign', 'error'); return; }
+
+  const checks = all
+    ? document.querySelectorAll('#recycleBody tr:not([style*="display:none"]) .lead-check')
+    : document.querySelectorAll('.lead-check:checked');
+  const leadIds = [...checks].map(c => c.value);
+
+  if (!leadIds.length) { DF.toast('No leads selected', 'warning'); return; }
+  if (!confirm(`Recycle ${leadIds.length} leads into ${document.getElementById('targetCampaign').options[document.getElementById('targetCampaign').selectedIndex].text}?`)) return;
+
+  const res  = await fetch('{% url "leads:recycle" %}', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token }}' },
+    body: JSON.stringify({
+      lead_ids:      leadIds,
+      campaign_id:   campaign,
+      priority:      document.getElementById('recyclePriority').value,
+      reset_attempts:document.getElementById('resetAttempts').checked,
+      delay_minutes: parseInt(document.getElementById('recycleDelay').value),
+    }),
+  });
+  const data = await res.json();
+  if (data.success) {
+    DF.toast(`${data.recycled} leads queued for recycling`, 'success');
+    setTimeout(() => location.reload(), 1000);
+  } else {
+    DF.toast(data.error || 'Recycle failed', 'error');
+  }
+}
+</script>
+{% endblock %}

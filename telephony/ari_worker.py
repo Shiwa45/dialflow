@@ -293,7 +293,7 @@ class ARIEventHandler:
     async def on_channel_state_change(self, event):
         channel_id = event.get('channel', {}).get('id', '')
         state      = event.get('channel', {}).get('state', '')
-        logger.debug(f'ChannelStateChange: {channel_id} → {state}')
+        logger.debug(f'ChannelStateChange: {channel_id} -> {state}')
 
     async def on_hangup_request(self, event):
         channel_id = event.get('channel', {}).get('id', '')
@@ -476,7 +476,7 @@ async def run_ari_worker(server_config: dict):
             logger.info(f'ARI worker connecting to {server_config["ARI_HOST"]}:{server_config["ARI_PORT"]} …')
             async with websockets.connect(ws_url, ping_interval=30, ping_timeout=10) as ws:
                 delay = 2  # reset on successful connection
-                logger.info('ARI worker connected ✓')
+                logger.info('ARI worker connected [OK]')
 
                 # Update server status in DB
                 await sync_to_async(_mark_server_connected)(server_config['ARI_HOST'])

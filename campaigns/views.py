@@ -303,3 +303,17 @@ def callback_list(request):
         'upcoming': upcoming,
         'past_due': past_due,
     })
+
+
+# ── Hopper stats API (for lead monitor) ──────────────────────────────────────
+
+@login_required
+def hopper_stats_api_all(request):
+    """Return hopper stats for all active campaigns (for lead monitor dashboard)."""
+    campaigns = Campaign.objects.filter(status__in=['active','paused'])
+    from campaigns.hopper import get_hopper_stats
+    result = [
+        {'id': c.id, 'name': c.name, 'status': c.status, **get_hopper_stats(c.id)}
+        for c in campaigns
+    ]
+    return JsonResponse({'campaigns': result})

@@ -7,7 +7,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/css/main.css">
+  <link rel="stylesheet" href="/static/css/theme.css">
 {% block extra_css %}{% endblock %}
 </head>
 <body class="{% block body_class %}app-layout{% endblock %}">
@@ -37,6 +39,9 @@
       <a href="{% url 'calls:list' %}" class="nav-item {% block nav_calls %}{% endblock %}">
         <i class="fa-solid fa-phone nav-icon"></i><span>Call Logs</span>
       </a>
+      <a href="{% url 'reports:lead_monitor' %}" class="nav-item {% block nav_monitor_leads %}{% endblock %}">
+        <i class="fa-solid fa-signal nav-icon"></i><span class="nav-label">Lead Monitor</span>
+      </a>
       <a href="{% url 'reports:home' %}" class="nav-item {% block nav_reports %}{% endblock %}">
         <i class="fa-solid fa-chart-bar nav-icon"></i><span>Reports</span>
       </a>
@@ -52,7 +57,7 @@
       <a href="{% url 'agents:dashboard' %}" class="nav-item {% block nav_dashboard %}{% endblock %}">
         <i class="fa-solid fa-headset nav-icon"></i><span>Dashboard</span>
       </a>
-      <a href="{% url 'agents:call_history_page' %}" class="nav-item {% block nav_calls_agent %}{% endblock %}">
+      <a href="{% url 'agents:call_history_page' %}" class="nav-item {% block nav_agent_calls %}{% endblock %}">
         <i class="fa-solid fa-clock-rotate-left nav-icon"></i><span>My Calls</span>
       </a>
       {% endif %}
@@ -65,7 +70,12 @@
           <span class="user-name">{{ user.get_full_name|default:user.username }}</span>
           <span class="user-role">{{ user.get_role_display }}</span>
         </div>
-        <a href="{% url 'users:logout' %}" class="logout-btn" title="Logout">
+        {% if user.is_admin %}
+      <a href="{% url 'users:user_management' %}" class="nav-item {% block nav_users %}{% endblock %}" style="margin-bottom:4px">
+        <i class="fa-solid fa-users-gear nav-icon"></i><span class="nav-label">Users</span>
+      </a>
+      {% endif %}
+      <a href="{% url 'users:logout' %}" class="logout-btn" title="Logout">
           <i class="fa-solid fa-arrow-right-from-bracket"></i>
         </a>
       </div>
@@ -79,6 +89,10 @@
         <i class="fa-solid fa-bars"></i>
       </button>
       <div class="topbar-right">
+      <!-- Dark/light mode toggle -->
+      <div class="theme-toggle" id="theme-toggle-btn" role="button" tabindex="0" title="Toggle dark/light mode" style="cursor:pointer">
+        <div class="theme-slider"><i class="fas fa-sun" id="topbar-theme-icon"></i></div>
+      </div>
         {% block topbar_right %}{% endblock %}
         <div class="connection-status" id="connStatus" title="Server connection">
           <span class="conn-dot"></span>
@@ -126,6 +140,25 @@ function setConnected(ok) {
     window.__connStatus.className = 'connection-status ' + (ok ? 'connected' : 'disconnected');
   }
 }
+</script>
+<script>
+// Theme persistence
+(function(){
+  const html = document.getElementById('html-root');
+  const applyTheme = t => {
+    html && html.setAttribute('data-theme', t);
+    localStorage.setItem('df_theme', t);
+    const icon = document.getElementById('topbar-theme-icon');
+    if (icon) icon.className = t === 'dark' ? 'fas fa-moon' : 'fas fa-sun';
+  };
+  applyTheme(localStorage.getItem('df_theme') || 'dark');
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('theme-toggle-btn')?.addEventListener('click', () => {
+      const cur = (document.getElementById('html-root')?.getAttribute('data-theme') || 'dark');
+      applyTheme(cur === 'dark' ? 'light' : 'dark');
+    });
+  });
+})();
 </script>
 </body>
 </html>

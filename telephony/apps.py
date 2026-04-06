@@ -71,4 +71,4 @@ class TelephonyConfig(AppConfig):
         from telephony.ari_worker import start_ari_worker_thread
         start_ari_worker_thread(cfg)
         _ari_started = True
-        logger.info('TelephonyConfig.ready() → ARI worker thread launched ✓')
+        logger.info('TelephonyConfig.ready() -> ARI worker thread launched [OK]')

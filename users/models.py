@@ -26,9 +26,9 @@ class User(AbstractUser):
         (ROLE_AGENT,      'Agent'),
     ]
 
-    role         = models.CharField(max_length=20, choices=ROLE_CHOICES, default=ROLE_AGENT)
-    phone_number = models.CharField(max_length=20, blank=True)
-    timezone     = models.CharField(max_length=50, choices=TIMEZONE_CHOICES, default='Asia/Kolkata')
+    role          = models.CharField(max_length=20, choices=ROLE_CHOICES, default=ROLE_AGENT)
+    phone_number  = models.CharField(max_length=20, blank=True)
+    timezone      = models.CharField(max_length=50, choices=TIMEZONE_CHOICES, default='Asia/Kolkata')
     avatar   = models.ImageField(upload_to='avatars/', blank=True, null=True)
     is_active = models.BooleanField(default=True)
 

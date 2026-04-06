@@ -251,3 +251,24 @@ LOGGING = {
         'celery': {'handlers': ['console', 'file'], 'level': 'INFO', 'propagate': False},
     },
 }
+
+# ── Sarvam AI (Indian voice AI calling) ──────────────────────────────────────
+SARVAM_AI = {
+    'API_KEY':   config('SARVAM_AI_API_KEY', default=''),
+    'BASE_URL':  'https://api.sarvam.ai',
+    'DEFAULT_VOICE':    'meera',       # meera | arjun | anushka | kalpana
+    'DEFAULT_LANGUAGE': 'hi-IN',       # hi-IN | en-IN | ta-IN | te-IN ...
+    'DEFAULT_SPEED':    1.0,
+}
+
+# ── Dialer settings ───────────────────────────────────────────────────────────
+DIALER = {
+    'RECORDING_PATH':        config('RECORDING_PATH', default='/var/spool/asterisk/monitor'),
+    'RECORDING_URL_PREFIX':  '/recordings/',
+    'ZOMBIE_TIMEOUT':        90,        # seconds before agent marked offline
+    'HEARTBEAT_INTERVAL':    25,        # seconds between WS heartbeats
+    'HOPPER_FILL_INTERVAL':  30,        # seconds between hopper fills
+    'MAX_CONCURRENT_CALLS':  200,       # global cap
+    'TARGET_UTILISATION':    0.90,      # target agent utilisation for Erlang-C
+    'DEFAULT_TIMEZONE':      'Asia/Kolkata',
+}

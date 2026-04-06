@@ -23,22 +23,8 @@ class LoginForm(AuthenticationForm):
 class UserCreateForm(UserCreationForm):
     class Meta:
         model = User
-        fields = (
-            'username',
-            'first_name',
-            'last_name',
-            'email',
-            'role',
-            'phone_number',
-            'timezone',
-            'password1',
-            'password2',
-        )
-        widgets = {
-            f: forms.TextInput(attrs={'class': 'form-input'})
-            for f in ('username', 'first_name', 'last_name', 'email', 'phone_number')
-        }
-        labels = {'phone_number': 'Phone'}
+        fields = ('username', 'first_name', 'last_name', 'email', 'role', 'phone_number', 'timezone', 'password1', 'password2')
+        widgets = {f: forms.TextInput(attrs={'class': 'form-input'}) for f in ('username', 'first_name', 'last_name', 'email', 'phone_number')}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -51,7 +37,6 @@ class UserProfileForm(forms.ModelForm):
     class Meta:
         model = User
         fields = ('first_name', 'last_name', 'email', 'phone_number', 'timezone', 'avatar')
-        labels = {'phone_number': 'Phone'}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

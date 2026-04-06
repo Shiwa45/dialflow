@@ -1,0 +1,430 @@
+{% extends "base/base.html" %}
+{% block title %}Import Leads — DialFlow Pro{% endblock %}
+{% block nav_leads %}active{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Import Leads</div>
+    <div class="page-subtitle">Upload any CSV format and map fields dynamically</div>
+  </div>
+  <a href="{% url 'leads:list' %}" class="btn btn-secondary">
+    <i class="fa-solid fa-arrow-left"></i> Back to Leads
+  </a>
+</div>
+
+<!-- Step indicator -->
+<div style="display:flex;gap:0;margin-bottom:24px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+  <div class="step-indicator active" id="step1-tab" style="flex:1;padding:14px 20px;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;background:var(--accent-lt);color:var(--accent);border-right:1px solid var(--border)">
+    <span style="width:22px;height:22px;background:var(--accent);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">1</span>
+    Upload File
+  </div>
+  <div class="step-indicator" id="step2-tab" style="flex:1;padding:14px 20px;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--text-muted);border-right:1px solid var(--border)">
+    <span style="width:22px;height:22px;background:var(--border);color:var(--text-muted);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">2</span>
+    Map Fields
+  </div>
+  <div class="step-indicator" id="step3-tab" style="flex:1;padding:14px 20px;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--text-muted)">
+    <span style="width:22px;height:22px;background:var(--border);color:var(--text-muted);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">3</span>
+    Import
+  </div>
+</div>
+
+<!-- Step 1: Upload -->
+<div id="step1">
+  <div class="card">
+    <div class="card-header"><span class="card-title">Upload CSV File</span></div>
+    <div class="card-body">
+      <!-- Drop zone -->
+      <div id="dropzone" style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:40px;text-align:center;cursor:pointer;transition:all .2s;margin-bottom:20px" onclick="document.getElementById('fileInput').click()" ondragover="onDragOver(event)" ondrop="onDrop(event)">
+        <i class="fa-solid fa-file-csv" style="font-size:2.5rem;color:var(--accent);display:block;margin-bottom:12px"></i>
+        <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px">Drop CSV file here or click to browse</div>
+        <div class="text-sm text-muted">Supports any CSV format — we'll help you map the columns</div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:8px">Max 50,000 rows · UTF-8 or Excel CSV</div>
+      </div>
+      <input type="file" id="fileInput" accept=".csv,.txt,.xlsx" style="display:none" onchange="onFileSelect(this)">
+
+      <!-- File info (hidden until selected) -->
+      <div id="fileInfo" style="display:none;background:var(--bg-sec);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <i class="fa-solid fa-file-csv" style="color:var(--teal);font-size:20px"></i>
+          <div>
+            <div id="fileName" style="font-weight:600;font-size:13.5px"></div>
+            <div id="fileSize" class="text-sm text-muted"></div>
+          </div>
+          <button onclick="clearFile()" class="btn btn-ghost btn-sm" style="margin-left:auto">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Options -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+        <div class="form-group">
+          <label class="form-label">Campaign</label>
+          <select class="form-input" id="campaignSelect">
+            <option value="">No campaign (import to pool)</option>
+            {% for c in campaigns %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Duplicate handling</label>
+          <select class="form-input" id="duplicateHandling">
+            <option value="skip">Skip duplicates (by phone)</option>
+            <option value="update">Update existing leads</option>
+            <option value="allow">Allow duplicates</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="hasHeader" checked>
+          <span class="form-label" style="margin:0">First row is header</span>
+        </label>
+      </div>
+
+      <button class="btn btn-primary" onclick="previewFile()" id="previewBtn" disabled>
+        <i class="fa-solid fa-eye"></i> Preview & Map Fields
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Step 2: Field mapping -->
+<div id="step2" style="display:none">
+  <div style="display:grid;grid-template-columns:1fr 360px;gap:16px">
+    <div>
+      <div class="card mb-4">
+        <div class="card-header">
+          <span class="card-title">Map Your CSV Columns</span>
+          <button class="btn btn-secondary btn-sm" onclick="autoMap()">
+            <i class="fa-solid fa-wand-magic-sparkles"></i> Auto-detect
+          </button>
+        </div>
+        <div class="card-body">
+          <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:16px">
+            Map each CSV column to a DialFlow field. <span style="color:var(--accent);font-weight:600">Phone number is required.</span>
+          </div>
+          <div id="mappingRows">
+            <!-- Rows injected by JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <!-- Preview -->
+      <div class="card mb-4">
+        <div class="card-header"><span class="card-title">Preview (first 5 rows)</span></div>
+        <div class="card-body" style="padding:0;overflow-x:auto">
+          <table class="table" id="previewTable" style="font-size:12px">
+            <thead id="previewHead"></thead>
+            <tbody id="previewBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="card">
+        <div class="card-body" style="padding:14px">
+          <div class="lead-field mb-4">
+            <span class="lead-field-label">Total rows</span>
+            <span class="text-mono" id="totalRows">0</span>
+          </div>
+          <div class="lead-field mb-4">
+            <span class="lead-field-label">Est. valid</span>
+            <span class="text-mono text-green" id="validRows">0</span>
+          </div>
+          <div class="lead-field">
+            <span class="lead-field-label">Est. duplicates</span>
+            <span class="text-mono text-muted" id="dupRows">0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:10px">
+    <button class="btn btn-secondary" onclick="backToStep1()">
+      <i class="fa-solid fa-arrow-left"></i> Back
+    </button>
+    <button class="btn btn-primary" onclick="startImport()" id="importBtn">
+      <i class="fa-solid fa-upload"></i> Import Leads
+    </button>
+  </div>
+</div>
+
+<!-- Step 3: Progress -->
+<div id="step3" style="display:none">
+  <div class="card" style="text-align:center;padding:40px">
+    <div id="importSpinner">
+      <i class="fa-solid fa-spinner fa-spin" style="font-size:2.5rem;color:var(--accent);margin-bottom:16px;display:block"></i>
+      <div style="font-size:16px;font-weight:700;margin-bottom:8px">Importing leads…</div>
+      <div class="text-muted text-sm">This may take a moment for large files.</div>
+    </div>
+    <div id="importResult" style="display:none">
+      <i class="fa-solid fa-circle-check" style="font-size:3rem;color:var(--success);margin-bottom:16px;display:block"></i>
+      <div style="font-size:18px;font-weight:800;margin-bottom:8px">Import Complete!</div>
+      <div id="importSummary" class="text-muted text-sm mb-4"></div>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <a href="{% url 'leads:list' %}" class="btn btn-primary">View Leads</a>
+        <button onclick="resetImport()" class="btn btn-secondary">Import Another</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.lead-field{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px}
+.lead-field:last-child{border-bottom:none}
+.lead-field-label{color:var(--text-muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.mapper-select{width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius-xs);background:var(--card);color:var(--text);font-size:12.5px;outline:none}
+.mapper-select:focus{border-color:var(--accent)}
+.mapper-select.required-field{border-color:var(--accent)}
+</style>
+
+<script>
+const DIALFLOW_FIELDS = [
+  {value:'',            label:'-- Skip this column --'},
+  {value:'first_name',  label:'First Name'},
+  {value:'last_name',   label:'Last Name'},
+  {value:'primary_phone',label:'Phone Number *'},
+  {value:'email',       label:'Email'},
+  {value:'company',     label:'Company'},
+  {value:'city',        label:'City'},
+  {value:'state',       label:'State / Province'},
+  {value:'zip_code',    label:'Zip / Postal Code'},
+  {value:'country',     label:'Country'},
+  {value:'source',      label:'Lead Source'},
+  {value:'priority',    label:'Priority (1-10)'},
+  {value:'external_id', label:'External ID'},
+];
+
+const PHONE_ALIASES = ['phone','mobile','cell','number','telephone','tel','contact','phone_number','mobile_number','primary_phone','phonenumber'];
+const NAME_ALIASES  = {first_name:['first','firstname','fname','name','first_name'],last_name:['last','lastname','lname','surname','last_name']};
+const EMAIL_ALIASES = ['email','mail','email_address'];
+
+let parsedData = [];   // [{header:[], rows:[[...]]}]
+let csvHeaders  = [];
+let mappings    = {};  // csvCol -> dialflowField
+
+function onDragOver(e) { e.preventDefault(); document.getElementById('dropzone').style.borderColor='var(--accent)'; }
+
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropzone').style.borderColor='';
+  const file = e.dataTransfer.files[0];
+  if (file) processFile(file);
+}
+
+function onFileSelect(input) {
+  if (input.files[0]) processFile(input.files[0]);
+}
+
+function processFile(file) {
+  if (!file.name.match(/\.(csv|txt)$/i) && !file.name.match(/\.xlsx$/i)) {
+    DF.toast('Please upload a CSV or text file', 'error'); return;
+  }
+  document.getElementById('fileName').textContent = file.name;
+  document.getElementById('fileSize').textContent = (file.size / 1024).toFixed(1) + ' KB';
+  document.getElementById('fileInfo').style.display = 'block';
+  document.getElementById('previewBtn').disabled   = false;
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    parsedData  = parseCSV(text);
+    csvHeaders  = parsedData.headers;
+    console.log('CSV parsed:', csvHeaders.length, 'columns,', parsedData.rows.length, 'rows');
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
+function parseCSV(text) {
+  // Handle BOM
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  const hasHeader = document.getElementById('hasHeader')?.checked ?? true;
+
+  function splitLine(line) {
+    const result = [];
+    let inQuote = false, cur = '';
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQuote = !inQuote; }
+      else if (c === ',' && !inQuote) { result.push(cur.trim()); cur = ''; }
+      else { cur += c; }
+    }
+    result.push(cur.trim());
+    return result;
+  }
+
+  const firstLine = splitLine(lines[0]);
+  const headers   = hasHeader ? firstLine : firstLine.map((_, i) => `Column ${i+1}`);
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+  const rows      = dataLines.slice(0, 200).map(splitLine);
+
+  return { headers, rows, total: dataLines.length };
+}
+
+function clearFile() {
+  document.getElementById('fileInfo').style.display = 'none';
+  document.getElementById('previewBtn').disabled     = true;
+  document.getElementById('fileInput').value         = '';
+  parsedData = []; csvHeaders = [];
+}
+
+function previewFile() {
+  if (!csvHeaders.length) { DF.toast('No file selected or file is empty', 'error'); return; }
+  buildMappingUI();
+  buildPreviewTable();
+  document.getElementById('totalRows').textContent = parsedData.total || 0;
+  document.getElementById('validRows').textContent = parsedData.total || 0;
+  document.getElementById('step1').style.display = 'none';
+  document.getElementById('step2').style.display = '';
+  activateStep(2);
+}
+
+function buildMappingUI() {
+  const container = document.getElementById('mappingRows');
+  autoMap();  // pre-populate intelligent guesses
+
+  container.innerHTML = csvHeaders.map((col, i) => {
+    const suggested = mappings[col] || '';
+    const isRequired = suggested === 'primary_phone';
+    return `
+    <div class="mapper-row" style="display:grid;grid-template-columns:1fr 28px 1fr;gap:8px;align-items:center;margin-bottom:8px;padding:8px;background:var(--bg-sec);border-radius:var(--radius-sm)">
+      <div class="mapper-source" style="font-family:var(--font-mono);font-size:12px;color:var(--text-sec);background:var(--card);padding:7px 10px;border-radius:var(--radius-xs);border:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${col}">${col}</div>
+      <div style="text-align:center;color:var(--accent)"><i class="fa-solid fa-arrow-right" style="font-size:12px"></i></div>
+      <select class="mapper-select ${isRequired ? 'required-field' : ''}" data-col="${col}" onchange="onMappingChange(this)">
+        ${DIALFLOW_FIELDS.map(f => `<option value="${f.value}" ${f.value === suggested ? 'selected' : ''}>${f.label}</option>`).join('')}
+      </select>
+    </div>`;
+  }).join('');
+}
+
+function autoMap() {
+  mappings = {};
+  csvHeaders.forEach(col => {
+    const lower = col.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    if (PHONE_ALIASES.some(a => lower.includes(a))) {
+      mappings[col] = 'primary_phone';
+    } else if (NAME_ALIASES.first_name.some(a => lower === a || lower.includes(a))) {
+      mappings[col] = 'first_name';
+    } else if (NAME_ALIASES.last_name.some(a => lower === a || lower.includes(a))) {
+      mappings[col] = 'last_name';
+    } else if (EMAIL_ALIASES.some(a => lower.includes(a))) {
+      mappings[col] = 'email';
+    } else if (lower.includes('compan') || lower.includes('org')) {
+      mappings[col] = 'company';
+    } else if (lower === 'city') {
+      mappings[col] = 'city';
+    } else if (lower === 'state' || lower === 'province') {
+      mappings[col] = 'state';
+    } else if (lower.includes('zip') || lower.includes('postal')) {
+      mappings[col] = 'zip_code';
+    } else if (lower.includes('source')) {
+      mappings[col] = 'source';
+    }
+  });
+}
+
+function onMappingChange(sel) {
+  mappings[sel.dataset.col] = sel.value;
+  sel.classList.toggle('required-field', sel.value === 'primary_phone');
+}
+
+function buildPreviewTable() {
+  const head = document.getElementById('previewHead');
+  const body = document.getElementById('previewBody');
+  head.innerHTML = '<tr>' + csvHeaders.map(h => `<th style="font-size:10px">${h}</th>`).join('') + '</tr>';
+  body.innerHTML = parsedData.rows.slice(0,5).map(row =>
+    '<tr>' + row.map(cell => `<td style="font-size:11px">${cell||''}</td>`).join('') + '</tr>'
+  ).join('');
+}
+
+function backToStep1() {
+  document.getElementById('step2').style.display = 'none';
+  document.getElementById('step1').style.display = '';
+  activateStep(1);
+}
+
+async function startImport() {
+  // Validate: phone field must be mapped
+  const hasPhone = Object.values(mappings).includes('primary_phone');
+  if (!hasPhone) {
+    DF.toast('You must map at least one column to "Phone Number"', 'error');
+    return;
+  }
+
+  document.getElementById('step2').style.display = 'none';
+  document.getElementById('step3').style.display = '';
+  activateStep(3);
+
+  // Prepare data for import
+  const file = document.getElementById('fileInput').files[0];
+  if (!file) { DF.toast('No file', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('mappings', JSON.stringify(mappings));
+  formData.append('campaign_id', document.getElementById('campaignSelect').value);
+  formData.append('duplicate_handling', document.getElementById('duplicateHandling').value);
+  formData.append('has_header', document.getElementById('hasHeader').checked ? '1' : '0');
+
+  try {
+    const res  = await fetch('{% url "leads:import_mapped" %}', {
+      method: 'POST',
+      headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+      body: formData,
+    });
+    const data = await res.json();
+    document.getElementById('importSpinner').style.display = 'none';
+    document.getElementById('importResult').style.display  = '';
+    if (data.success) {
+      document.getElementById('importSummary').innerHTML =
+        `<strong style="color:var(--success)">${data.created}</strong> leads created &nbsp;·&nbsp; ` +
+        `<strong style="color:var(--text-muted)">${data.skipped}</strong> skipped &nbsp;·&nbsp; ` +
+        `<strong style="color:var(--danger)">${data.errors}</strong> errors`;
+    } else {
+      document.getElementById('importSummary').innerHTML =
+        `<span style="color:var(--danger)">${data.error || 'Import failed'}</span>`;
+    }
+  } catch(e) {
+    document.getElementById('importSpinner').style.display = 'none';
+    document.getElementById('importResult').style.display  = '';
+    document.getElementById('importSummary').innerHTML = '<span style="color:var(--danger)">Network error during import.</span>';
+  }
+}
+
+function resetImport() {
+  document.getElementById('step3').style.display = 'none';
+  document.getElementById('step1').style.display = '';
+  clearFile();
+  activateStep(1);
+  document.getElementById('importSpinner').style.display = '';
+  document.getElementById('importResult').style.display  = 'none';
+}
+
+function activateStep(n) {
+  [1,2,3].forEach(i => {
+    const tab = document.getElementById(`step${i}-tab`);
+    if (tab) {
+      if (i <= n) {
+        tab.style.background = i === n ? 'var(--accent-lt)' : 'var(--bg-sec)';
+        tab.style.color      = i === n ? 'var(--accent)' : 'var(--text-sec)';
+        tab.querySelector('span').style.background = i === n ? 'var(--accent)' : 'var(--teal)';
+        tab.querySelector('span').style.color = '#fff';
+      } else {
+        tab.style.background = '';
+        tab.style.color      = 'var(--text-muted)';
+        tab.querySelector('span').style.background = 'var(--border)';
+        tab.querySelector('span').style.color = 'var(--text-muted)';
+      }
+    }
+  });
+}
+</script>
+{% endblock %}

@@ -1,187 +1,732 @@
-{% extends "base/base.html" %}
-{% block title %}Agent Dashboard — DialFlow Pro{% endblock %}
-{% block nav_dashboard %}active{% endblock %}
-
-{% block extra_css %}
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Dashboard — DialFlow Pro</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{% static 'css/theme.css' %}">
 <style>
-  .page-body { padding: 16px; height: calc(100vh - 52px); overflow: hidden; }
+body { overflow-x: hidden; }
+
+/* ── 3-column agent layout ── */
+.agent-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr 360px;
+  min-height: calc(100vh - 56px);
+}
+
+/* HEADER */
+.agent-header {
+  position: sticky; top: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px; height: 56px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 8px var(--shadow);
+}
+.header-brand { display: flex; align-items: center; gap: 12px; }
+.brand-logo {
+  width: 34px; height: 34px;
+  background: linear-gradient(135deg, var(--accent), #ff6b4a);
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: .9rem;
+  box-shadow: 0 2px 12px var(--accent-glow);
+}
+.brand-info h1 { font-size: 1rem; font-weight: 800; }
+.brand-info p  { font-size: .72rem; color: var(--text-muted); margin-top: 1px; }
+.header-actions { display: flex; align-items: center; gap: 10px; }
+.header-link {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: .75rem; font-weight: 600; color: var(--text-sec);
+  border: 1px solid var(--border); padding: 6px 13px;
+  border-radius: var(--radius-xs); text-decoration: none; transition: all .2s;
+}
+.header-link:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-lt); }
+
+/* Theme toggle */
+.theme-toggle { width: 44px; height: 24px; border-radius: 12px; border: 1.5px solid var(--border); background: var(--card-light); cursor: pointer; position: relative; transition: all .3s; }
+.theme-toggle:hover { border-color: var(--accent); }
+.theme-slider { position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%; background: var(--accent); transition: transform .3s cubic-bezier(.4,0,.2,1); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 9px; }
+[data-theme="dark"] .theme-slider { transform: translateX(20px); }
+
+/* LEFT phone sidebar */
+.sidebar-phone {
+  background: var(--phone-body);
+  border-right: 1px solid #2a2a30;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 18px 14px; overflow-y: auto;
+  max-height: calc(100vh - 56px);
+}
+.retro-phone { width: 100%; max-width: 300px; }
+.phone-brand { font-family: "Space Mono", monospace; font-weight: 700; font-size: .68rem; text-transform: uppercase; letter-spacing: .35em; color: #666; text-align: center; margin-bottom: 4px; }
+.phone-model { font-family: "Space Mono", monospace; font-size: .52rem; color: #444; text-align: center; letter-spacing: .12em; margin-bottom: 14px; }
+
+.webrtc-status { display: flex; align-items: center; gap: 8px; padding: 6px 12px; margin-bottom: 10px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); border-radius: var(--radius-xs); font-family: "JetBrains Mono", monospace; font-size: .68rem; }
+.webrtc-dot { width: 8px; height: 8px; border-radius: 50%; background: #555; transition: background .5s; flex-shrink: 0; }
+.webrtc-dot.registered { background: var(--neon-green); box-shadow: 0 0 8px var(--neon-green); }
+.webrtc-dot.connecting  { background: var(--neon-amber); animation: blink 1s infinite; }
+.webrtc-dot.failed      { background: var(--danger); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+
+.auto-answer-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; margin-bottom: 10px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); border-radius: var(--radius-xs); font-size: .75rem; font-weight: 600; color: #aaa; }
+.toggle-sw { position: relative; display: inline-block; width: 40px; height: 22px; }
+.toggle-sw input { opacity: 0; width: 0; height: 0; }
+.toggle-track { position: absolute; cursor: pointer; inset: 0; background: #333; border-radius: 11px; transition: .3s; }
+.toggle-track::before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: .3s; }
+.toggle-sw input:checked + .toggle-track { background: var(--neon-green); }
+.toggle-sw input:checked + .toggle-track::before { transform: translateX(18px); }
+
+.phone-screen { background: var(--phone-screen); border-radius: var(--radius-sm); border: 1px solid rgba(0,212,255,.12); padding: 12px 14px; margin-bottom: 10px; min-height: 90px; display: flex; flex-direction: column; justify-content: center; box-shadow: inset 0 2px 12px rgba(0,0,0,.4), 0 0 20px rgba(0,212,255,.04); }
+.phone-num-disp { font-family: "JetBrains Mono", monospace; font-size: 1.4rem; font-weight: 700; color: var(--neon-cyan); letter-spacing: .1em; min-height: 30px; text-align: center; text-shadow: 0 0 12px var(--neon-cyan); }
+.phone-status-disp { font-family: "JetBrains Mono", monospace; font-size: .6rem; letter-spacing: .2em; color: #334455; text-transform: uppercase; text-align: center; margin-top: 4px; }
+.phone-timer { font-family: "JetBrains Mono", monospace; font-size: 1.1rem; font-weight: 700; color: var(--neon-green); text-align: center; margin-top: 4px; text-shadow: 0 0 10px var(--neon-green); }
+.phone-ext-line { font-family: "JetBrains Mono", monospace; font-size: .55rem; color: #334455; margin-top: 6px; text-transform: uppercase; letter-spacing: .08em; text-align: center; }
+
+.phone-keypad { display: grid; grid-template-columns: repeat(3,1fr); gap: 5px; margin-bottom: 8px; padding: 0 2px; }
+.phone-key { aspect-ratio: 1.3; border: none; border-radius: var(--radius-sm); background: linear-gradient(180deg,#3a3a40 0%,#2e2e34 100%); color: #ddd; font-size: 1.1rem; font-weight: 700; font-family: "JetBrains Mono", monospace; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: all .12s; box-shadow: 0 2px 4px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.08); }
+.phone-key:hover { background: linear-gradient(180deg,#454550 0%,#3a3a42 100%); color: #fff; }
+.phone-key:active { transform: scale(.95); }
+.phone-key-sub { font-size: .4rem; color: #666; margin-top: 1px; letter-spacing: .15em; }
+
+.phone-controls { display: flex; gap: 5px; margin-bottom: 8px; padding: 0 2px; }
+.ctrl-btn { flex: 1; padding: 11px; border: none; border-radius: var(--radius-sm); font-weight: 700; font-size: .75rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px; text-transform: uppercase; letter-spacing: .06em; transition: all .2s; }
+.ctrl-btn.call   { background: linear-gradient(135deg,#16a34a,#15803d); color: #fff; box-shadow: 0 3px 14px rgba(22,163,74,.35); }
+.ctrl-btn.hangup { background: linear-gradient(135deg,#ef4444,#dc2626); color: #fff; box-shadow: 0 3px 14px rgba(239,68,68,.35); }
+.ctrl-btn:hover:not(:disabled) { filter: brightness(1.12); transform: translateY(-1px); }
+.ctrl-btn:disabled { opacity: .35; cursor: not-allowed; transform: none; }
+
+.phone-extras { display: grid; grid-template-columns: repeat(4,1fr); gap: 4px; padding: 0 2px; margin-bottom: 14px; }
+.extra-btn { padding: 8px 4px; border: 1px solid rgba(255,255,255,.08); border-radius: var(--radius-xs); background: rgba(255,255,255,.04); color: #999; font-size: .6rem; font-weight: 600; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; text-transform: uppercase; letter-spacing: .04em; transition: all .2s; }
+.extra-btn i { font-size: .75rem; }
+.extra-btn:hover:not(:disabled) { border-color: var(--accent); color: #fff; background: rgba(255,68,51,.1); }
+.extra-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.extra-btn:disabled { opacity: .25; cursor: not-allowed; }
+
+.status-section { width: 100%; margin-top: 6px; }
+.status-section-title { font-size: .6rem; color: #555; text-transform: uppercase; letter-spacing: .15em; text-align: center; margin-bottom: 8px; font-family: "Space Mono", monospace; }
+.status-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.status-chip { padding: 8px 6px; border: 1px solid rgba(255,255,255,.08); border-radius: var(--radius-xs); background: rgba(255,255,255,.04); color: #888; font-size: .65rem; font-weight: 700; cursor: pointer; text-align: center; transition: all .2s; text-transform: uppercase; letter-spacing: .05em; text-decoration: none; display: block; }
+.status-chip:hover { border-color: var(--accent); color: var(--accent); }
+.status-chip.is-active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.status-chip:disabled { opacity: .3; cursor: not-allowed; }
+
+.campaign-select-wrap { width: 100%; margin-top: 10px; }
+.campaign-select { width: 100%; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius-xs); color: #bbb; padding: 8px 10px; font-size: .75rem; outline: none; font-family: "Outfit", sans-serif; }
+.campaign-select:focus { border-color: var(--accent); }
+
+/* CENTER */
+.call-center { display: flex; flex-direction: column; overflow-y: auto; max-height: calc(100vh - 56px); padding: 20px; gap: 16px; background: var(--bg); }
+
+.status-timer-bar { display: flex; align-items: center; gap: 16px; padding: 12px 16px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.stimer-block { display: flex; flex-direction: column; }
+.stimer-label { font-size: .62rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 2px; }
+.stimer-val { font-size: 1.3rem; font-weight: 700; font-family: "JetBrains Mono", monospace; color: var(--text); }
+
+.call-spotlight { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; box-shadow: 0 2px 16px var(--shadow); }
+.cs-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.cs-title { font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; color: var(--text-sec); }
+.call-badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 13px; border-radius: 20px; font-weight: 700; font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; }
+.call-badge.idle      { background: var(--card-light); color: var(--text-muted); border: 1px solid var(--border); }
+.call-badge.ringing   { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+.call-badge.connected { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+.call-badge.wrapup    { background: #ede9fe; color: #5b21b6; border: 1px solid #ddd6fe; }
+
+.call-placeholder { border: 2px dashed var(--border); border-radius: var(--radius-sm); padding: 40px 20px; text-align: center; color: var(--text-muted); }
+.call-placeholder i { display: block; font-size: 2.2rem; margin-bottom: 12px; opacity: .35; }
+.call-details { display: none; }
+.call-details.visible { display: block; }
+.call-lead-name { font-size: 1.6rem; font-weight: 800; text-align: center; margin-bottom: 4px; }
+.call-lead-sub  { text-align: center; font-size: .85rem; color: var(--text-muted); margin-bottom: 16px; font-family: var(--font-mono); }
+.call-meta { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; background: var(--card-light); padding: 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+.call-meta > div { text-align: center; }
+.call-meta label { display: block; font-size: .58rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: .08em; margin-bottom: 3px; }
+.call-meta strong { font-size: .9rem; font-weight: 700; font-family: "JetBrains Mono", monospace; color: var(--text); }
+
+.tab-buttons { display: flex; gap: 2px; background: var(--card-light); border-radius: var(--radius-sm); padding: 3px; border: 1px solid var(--border); margin-bottom: 14px; }
+.tab-btn { flex: 1; padding: 9px 12px; background: transparent; border: none; border-radius: var(--radius-xs); color: var(--text-muted); font-size: .72rem; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: .05em; transition: all .2s; font-family: "Outfit", sans-serif; }
+.tab-btn.active { background: var(--card); color: var(--text); box-shadow: 0 1px 4px var(--shadow); }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
+.lead-info-row { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: .82rem; }
+.lead-info-row:last-child { border-bottom: none; }
+.lead-info-label { color: var(--text-muted); width: 80px; flex-shrink: 0; font-size: .7rem; font-weight: 700; text-transform: uppercase; }
+.lead-info-val { color: var(--text); font-weight: 500; }
+
+.call-notes { width: 100%; background: var(--card-light); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; color: var(--text); resize: vertical; min-height: 80px; font-family: "Outfit", sans-serif; font-size: .82rem; outline: none; }
+.call-notes:focus { border-color: var(--wrapup); box-shadow: 0 0 0 2px rgba(124,58,237,.15); }
+
+.stats-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
+.stat-card { background: var(--card-light); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; text-align: center; }
+.stat-card label { display: block; font-size: .6rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
+.stat-card strong { font-size: 1.4rem; font-weight: 700; font-family: "JetBrains Mono", monospace; }
+
+/* RIGHT sidebar */
+.sidebar-info { border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; max-height: calc(100vh - 56px); background: var(--card); }
+.info-section { padding: 16px; border-bottom: 1px solid var(--border); }
+.info-section-title { display: flex; align-items: center; gap: 7px; font-size: .7rem; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; color: var(--text-sec); margin-bottom: 12px; }
+.qs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.qs-cell { text-align: center; padding: 10px; background: var(--bg-sec); border-radius: var(--radius-xs); }
+.qs-val { font-size: 1.4rem; font-weight: 800; font-family: "JetBrains Mono", monospace; }
+.qs-label { font-size: .62rem; color: var(--text-muted); text-transform: uppercase; margin-top: 2px; }
+.callback-item { padding: 9px 12px; background: var(--bg-sec); border-radius: var(--radius-xs); margin-bottom: 6px; border-left: 3px solid var(--accent); }
+.callback-item label { display: block; font-size: .65rem; color: var(--text-muted); margin-bottom: 2px; }
+.callback-item strong { font-size: .78rem; font-weight: 600; }
+
+/* Disposition overlay */
+#disposition-overlay { display: none; position: fixed; inset: 0; z-index: 7000; background: rgba(8,8,12,.85); backdrop-filter: blur(16px); align-items: center; justify-content: center; }
+#disposition-overlay.visible { display: flex; }
+.disp-modal { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; width: min(540px,94vw); max-height: 85vh; overflow-y: auto; box-shadow: 0 32px 80px rgba(0,0,0,.5); }
+.disp-modal h3 { font-size: 1.1rem; font-weight: 800; border-bottom: 2px solid var(--wrapup); padding-bottom: .5rem; margin-bottom: .4rem; }
+.disp-modal .disp-subtitle { color: var(--text-muted); font-size: .78rem; margin-bottom: 18px; }
+.disp-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 8px; margin-bottom: 16px; }
+.disp-btn { padding: 12px 10px; border: 2px solid var(--border); border-radius: var(--radius-sm); background: var(--card-light); color: var(--text); font-size: .8rem; font-weight: 600; cursor: pointer; transition: all .15s; text-align: center; display: flex; align-items: center; gap: 6px; font-family: "Outfit", sans-serif; }
+.disp-btn:hover { border-color: var(--wrapup); background: rgba(124,58,237,.08); }
+.disp-btn.selected { border-color: var(--wrapup); background: var(--wrapup); color: #fff; }
+.disp-color { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.disp-hotkey { margin-left: auto; font-size: 10px; font-weight: 700; background: var(--border); padding: 1px 5px; border-radius: 3px; color: var(--text-muted); font-family: "JetBrains Mono", monospace; }
+.disp-notes { width: 100%; background: var(--card-light); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; color: var(--text); resize: vertical; min-height: 70px; margin-bottom: 14px; font-family: "Outfit", sans-serif; font-size: .83rem; outline: none; }
+.disp-notes:focus { outline: 2px solid var(--wrapup); }
+.disp-save-btn { display: block; width: 100%; padding: 14px; background: linear-gradient(135deg,#7c3aed,#6d28d9); color: #fff; border: none; border-radius: var(--radius-sm); font-size: .88rem; font-weight: 700; cursor: pointer; transition: all .2s; font-family: "Outfit", sans-serif; }
+.disp-save-btn:disabled { opacity: .4; cursor: not-allowed; }
+.disp-save-btn:not(:disabled):hover { filter: brightness(1.12); transform: translateY(-1px); }
+
+/* Wrapup bar */
+#wrapup-bar { display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 6000; background: linear-gradient(135deg,#7c3aed,#6d28d9); color: #fff; padding: 12px 28px; align-items: center; justify-content: center; gap: 16px; font-size: .85rem; font-weight: 700; box-shadow: 0 4px 24px var(--wrapup-glow); }
+#wrapup-bar.visible { display: flex; }
+.wrapup-dispose-btn { background: #fff; color: var(--wrapup); border: none; border-radius: var(--radius-xs); padding: 8px 20px; font-size: .78rem; font-weight: 800; cursor: pointer; transition: all .2s; }
+.wrapup-dispose-btn:hover { background: #ede9fe; transform: translateY(-1px); }
+#logout-banner { display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 6000; background: linear-gradient(135deg,var(--danger),#c0291a); color: #fff; padding: 10px; text-align: center; font-size: .8rem; font-weight: 700; }
+#logout-banner.visible { display: block; }
+
+/* Toast */
+#toast { position: fixed; bottom: 2rem; right: 2rem; padding: .85rem 1.75rem; border-radius: var(--radius-sm); color: #fff; font-weight: 600; font-size: .83rem; z-index: 8000; transform: translateY(80px); opacity: 0; transition: all .35s cubic-bezier(.4,0,.2,1); pointer-events: none; }
+#toast.show { transform: translateY(0); opacity: 1; }
+#toast.success { background: var(--success); }
+#toast.error   { background: var(--danger); }
+#toast.info    { background: var(--info); }
+#toast.warning { background: var(--warning); color: #1c1917; }
+
+@media (max-width: 1400px) { .agent-layout { grid-template-columns: 290px 1fr 320px; } }
+@media (max-width: 1100px) { .agent-layout { grid-template-columns: 1fr; } .sidebar-phone, .sidebar-info { max-height: none; border: none; border-bottom: 1px solid var(--border); } }
 </style>
-{% endblock %}
+</head>
+<body>
 
-{% block content %}
-<div class="dashboard-agent" id="agentDashboard">
+<div id="wrapup-bar">
+  <i class="fas fa-clipboard-check"></i>
+  <span>Wrap-up Required — Dispose the call before continuing.</span>
+  <button class="wrapup-dispose-btn" onclick="openDisposition()">
+    <i class="fas fa-tag"></i> Dispose Now
+  </button>
+</div>
+<div id="logout-banner">You cannot log out until you dispose the current call.</div>
 
-  <!-- LEFT COLUMN -->
-  <div class="dashboard-left">
+<div id="agent-app" data-agent-id="{{ user.id }}" data-status="{{ agent_status.status }}">
 
-    <!-- Status bar -->
-    <div class="agent-statusbar">
-      <div class="status-indicator">
-        <div class="status-dot offline" id="statusDot"></div>
-        <div>
-          <div class="status-label" id="statusLabel">Offline</div>
-          <div class="status-since" id="statusSince"></div>
-        </div>
+  <header class="agent-header">
+    <div class="header-brand">
+      <div class="brand-logo"><i class="fa-solid fa-headset"></i></div>
+      <div class="brand-info">
+        <h1>Welcome, {{ user.first_name|default:user.username }} </h1>
+        <p>DialFlow Pro &middot; {{ my_campaigns|length }} campaign{{ my_campaigns|length|pluralize }} assigned</p>
       </div>
-      <div class="status-timer" id="statusTimer">00:00</div>
+    </div>
+    <div class="header-actions">
+      <a href="{% url 'agents:call_history_page' %}" class="header-link"><i class="fas fa-history"></i> Calls</a>
+      <a href="{% url 'users:profile' %}" class="header-link"><i class="fas fa-user"></i> Profile</a>
+      <div class="theme-toggle" id="theme-toggle" role="button" tabindex="0" title="Toggle theme">
+        <div class="theme-slider"><i class="fas fa-sun" id="theme-icon"></i></div>
+      </div>
+      <div class="status-pill {{ agent_status.status }}" id="status-pill">{{ agent_status.get_status_display }}</div>
+    </div>
+  </header>
 
-      <div class="status-actions">
-        <button class="status-chip" data-set-status="ready" disabled>Ready</button>
-        <button class="status-chip" data-set-status="break"  disabled>Break</button>
+  <main class="agent-layout">
+
+    <!-- LEFT: Phone -->
+    <section class="sidebar-phone">
+      <div class="retro-phone">
+        <div class="phone-brand">DialFlow Phone</div>
+        <div class="phone-model">WebRTC Softphone v2.0</div>
+
+        <div class="webrtc-status">
+          <span class="webrtc-dot connecting" id="webrtc-dot"></span>
+          <span id="webrtc-status-text" style="color:#666">Initializing...</span>
+        </div>
+
+        <div class="auto-answer-row">
+          <span><i class="fa-solid fa-bolt" style="color:var(--neon-amber)"></i> Auto Answer</span>
+          <label class="toggle-sw">
+            <input type="checkbox" id="auto-answer-toggle" checked>
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+
+        <div class="phone-screen">
+          <div class="phone-num-disp" id="phone-num-disp"></div>
+          <div class="phone-status-disp" id="phone-status-disp">CONNECTING...</div>
+          <div class="phone-timer" id="phone-timer" style="display:none">00:00</div>
+          <div class="phone-ext-line">Ext: {{ webrtc_config.extension|default:"N/A" }}</div>
+        </div>
+
+        <div class="phone-keypad">
+          <button class="phone-key" data-digit="1">1<span class="phone-key-sub"></span></button>
+          <button class="phone-key" data-digit="2">2<span class="phone-key-sub">ABC</span></button>
+          <button class="phone-key" data-digit="3">3<span class="phone-key-sub">DEF</span></button>
+          <button class="phone-key" data-digit="4">4<span class="phone-key-sub">GHI</span></button>
+          <button class="phone-key" data-digit="5">5<span class="phone-key-sub">JKL</span></button>
+          <button class="phone-key" data-digit="6">6<span class="phone-key-sub">MNO</span></button>
+          <button class="phone-key" data-digit="7">7<span class="phone-key-sub">PQRS</span></button>
+          <button class="phone-key" data-digit="8">8<span class="phone-key-sub">TUV</span></button>
+          <button class="phone-key" data-digit="9">9<span class="phone-key-sub">WXYZ</span></button>
+          <button class="phone-key" data-digit="*">*<span class="phone-key-sub"></span></button>
+          <button class="phone-key" data-digit="0">0<span class="phone-key-sub">+</span></button>
+          <button class="phone-key" data-digit="#">#<span class="phone-key-sub"></span></button>
+        </div>
+
+        <div class="phone-controls">
+          <button class="ctrl-btn call"   id="btn-call"   disabled><i class="fas fa-phone"></i> Call</button>
+          <button class="ctrl-btn hangup" id="btn-hangup" disabled><i class="fas fa-phone-slash"></i> End</button>
+        </div>
+
+        <div class="phone-extras">
+          <button class="extra-btn" id="btn-mute"     disabled><i class="fas fa-microphone-slash"></i>Mute</button>
+          <button class="extra-btn" id="btn-hold"     disabled><i class="fas fa-pause"></i>Hold</button>
+          <button class="extra-btn" id="btn-transfer" disabled><i class="fas fa-right-left"></i>Xfer</button>
+          <button class="extra-btn" id="btn-clear"><i class="fas fa-delete-left"></i>Clear</button>
+        </div>
+
+        <div class="status-section">
+          <div class="status-section-title">Set Status</div>
+          <div class="status-actions">
+            <button class="status-chip {% if agent_status.status == 'ready' %}is-active{% endif %}" data-set-status="ready"><i class="fas fa-check-circle"></i> Ready</button>
+            <button class="status-chip {% if agent_status.status == 'break' %}is-active{% endif %}" data-set-status="break"><i class="fas fa-coffee"></i> Break</button>
+            <button class="status-chip {% if agent_status.status == 'training' %}is-active{% endif %}" data-set-status="training"><i class="fas fa-graduation-cap"></i> Training</button>
+            <a href="{% url 'users:logout' %}" class="status-chip" id="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
+          </div>
+        </div>
+
         {% if my_campaigns|length > 1 %}
-        <select id="campaignSelect" class="form-input" style="width:160px;font-size:12.5px;padding:5px 8px">
-          <option value="">Select campaign</option>
-          {% for c in my_campaigns %}
-          <option value="{{ c.id }}">{{ c.name }}</option>
-          {% endfor %}
-        </select>
+        <div class="campaign-select-wrap">
+          <select id="campaign-select" class="campaign-select">
+            <option value="">-- Select Campaign --</option>
+            {% for c in my_campaigns %}
+            <option value="{{ c.id }}" {% if agent_status.active_campaign_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
         {% endif %}
       </div>
-    </div>
+    </section>
 
-    <!-- Call panel -->
-    <div class="call-panel">
-      <div class="call-panel-body" id="callIdle">
-        <div class="call-idle-icon"><i class="fa-solid fa-headset"></i></div>
-        <div class="call-idle-text">Waiting for call</div>
-        <div class="call-idle-sub">Set status to <strong>Ready</strong> to receive calls</div>
-      </div>
-
-      <div class="call-active" id="callActive">
-        <div class="call-avatar" id="callAvatar">?</div>
-        <div>
-          <div class="call-name"  id="callLeadName">—</div>
-          <div class="call-phone" id="callLeadPhone">—</div>
+    <!-- CENTER -->
+    <section class="call-center">
+      <div class="status-timer-bar">
+        <div class="stimer-block">
+          <div class="stimer-label">Status Time</div>
+          <div class="stimer-val" id="status-timer">00:00</div>
         </div>
-        <div class="call-status-badge ringing" id="callBadge">Ringing…</div>
-        <div class="call-timer" id="callTimer">00:00</div>
-        <div class="call-controls">
-          <button class="ctrl-btn" id="btnMute"   title="Mute"     onclick="Agent.toggleMute()">
-            <i class="fa-solid fa-microphone"></i>
-          </button>
-          <button class="ctrl-btn" id="btnHold"   title="Hold"     onclick="Agent.toggleHold()">
-            <i class="fa-solid fa-pause"></i>
-          </button>
-          <button class="ctrl-btn danger" id="btnHangup" title="Hang up" onclick="Agent.hangup()">
-            <i class="fa-solid fa-phone-slash"></i>
-          </button>
+        <div class="stimer-block" style="margin-left:24px">
+          <div class="stimer-label">Session</div>
+          <div class="stimer-val" id="session-timer">00:00</div>
+        </div>
+        <div style="margin-left:auto;text-align:right">
+          <div class="stimer-label">Status</div>
+          <div style="font-size:.82rem;font-weight:600;color:var(--text)" id="status-since-text">{{ agent_status.get_status_display }}</div>
         </div>
       </div>
-    </div>
 
-    <!-- Today's stats -->
-    <div class="stat-grid stat-grid-3">
-      <div class="stat-card">
-        <div class="stat-label">Calls Today</div>
-        <div class="stat-value" id="statCalls">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Answered</div>
-        <div class="stat-value" id="statAnswered">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Talk Time</div>
-        <div class="stat-value" id="statTalk">00:00</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- RIGHT COLUMN -->
-  <div class="dashboard-right">
-
-    <!-- WebRTC softphone indicator -->
-    <div class="softphone-card">
-      <div class="softphone-header">
-        <i class="fa-solid fa-phone nav-icon"></i>
-        <span class="softphone-title">Softphone</span>
-        <div class="webrtc-indicator">
-          <div class="webrtc-dot connecting" id="webrtcDot"></div>
-          <span id="webrtcStatus">Connecting…</span>
+      <div class="call-spotlight">
+        <div class="cs-header">
+          <div class="cs-title"><i class="fas fa-phone-volume" style="color:var(--accent)"></i> Active Call</div>
+          <div class="call-badge idle" id="call-badge"><i class="fas fa-circle"></i> Idle</div>
+        </div>
+        <div class="call-placeholder" id="call-placeholder">
+          <i class="fas fa-headphones"></i>
+          <p>No active call &mdash; set status to <strong>Ready</strong> to receive calls</p>
+        </div>
+        <div class="call-details" id="call-details">
+          <div class="call-lead-name" id="call-lead-name">--</div>
+          <div class="call-lead-sub"  id="call-lead-sub">Connecting...</div>
+          <div class="call-meta">
+            <div><label>Phone</label><strong id="call-meta-phone">--</strong></div>
+            <div><label>Duration</label><strong id="call-meta-dur">00:00</strong></div>
+            <div><label>Campaign</label><strong id="call-meta-camp" style="font-size:.72rem">--</strong></div>
+            <div><label>Status</label><strong id="call-meta-status">--</strong></div>
+          </div>
         </div>
       </div>
-      <div style="padding:10px 16px;font-size:12px;color:var(--color-text-3)">
-        Ext: <strong id="extDisplay">{{ webrtc_config.extension|default:"—" }}</strong>
-        &nbsp;|&nbsp; Domain: <strong>{{ webrtc_config.domain }}</strong>
-      </div>
-    </div>
 
-    <!-- Lead info panel -->
-    <div class="lead-panel card" id="leadPanel">
-      <div class="card-header">
-        <span class="card-title">Lead Information</span>
-        <span class="text-sm text-muted" id="leadCampaign"></span>
-      </div>
-      <div class="card-body" id="leadBody">
-        <div style="text-align:center;padding:20px;color:var(--color-text-4);font-size:13px">
-          No active call
+      <div>
+        <div class="tab-buttons">
+          <button class="tab-btn active" data-tab="lead">Lead Info</button>
+          <button class="tab-btn" data-tab="notes">Notes</button>
+          <button class="tab-btn" data-tab="history">Recent Calls</button>
+          <button class="tab-btn" data-tab="stats">Today Stats</button>
+        </div>
+        <div class="tab-pane active" id="tab-lead">
+          <div id="lead-info-grid"><div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.82rem">Lead details appear when a call is received.</div></div>
+        </div>
+        <div class="tab-pane" id="tab-notes">
+          <textarea class="call-notes" id="call-notes" placeholder="Type call notes here..."></textarea>
+          <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="saveNotes()"><i class="fas fa-save"></i> Save Notes</button>
+        </div>
+        <div class="tab-pane" id="tab-history">
+          <div id="recent-calls-list" style="font-size:.82rem;color:var(--text-muted)">Loading...</div>
+        </div>
+        <div class="tab-pane" id="tab-stats">
+          <div class="stats-grid">
+            <div class="stat-card"><label>Calls</label><strong id="stat-total">0</strong></div>
+            <div class="stat-card"><label>Answered</label><strong id="stat-answered">0</strong></div>
+            <div class="stat-card"><label>Talk Time</label><strong id="stat-talk">0s</strong></div>
+            <div class="stat-card"><label>Rate</label><strong id="stat-rate">0%</strong></div>
+          </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- Notes -->
-    <div class="card">
-      <div class="card-header"><span class="card-title">Call Notes</span></div>
-      <div class="card-body" style="padding:12px">
-        <textarea id="callNotes" class="form-input" rows="3"
-                  placeholder="Type notes for this call…"
-                  style="resize:none;font-size:13px"></textarea>
+    <!-- RIGHT: Info -->
+    <aside class="sidebar-info">
+      <div class="info-section">
+        <div class="info-section-title"><i class="fas fa-wifi"></i> Connection</div>
+        <div style="display:flex;flex-direction:column;gap:7px;font-size:.78rem">
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-muted)">WebRTC</span><span id="rtc-status-text" style="font-weight:600">Connecting...</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-muted)">Server WS</span><span id="ws-status-text" style="font-weight:600;color:var(--warning)">Connecting...</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-muted)">Extension</span><span style="font-family:var(--font-mono);font-weight:600">{{ webrtc_config.extension|default:"--" }}</span></div>
+        </div>
       </div>
+      <div class="info-section">
+        <div class="info-section-title"><i class="fas fa-chart-bar"></i> Today</div>
+        <div class="qs-grid">
+          <div class="qs-cell"><div class="qs-val" id="qs-total">0</div><div class="qs-label">Calls</div></div>
+          <div class="qs-cell"><div class="qs-val" id="qs-answered" style="color:var(--success)">0</div><div class="qs-label">Answered</div></div>
+          <div class="qs-cell"><div class="qs-val" id="qs-talk" style="color:var(--teal)">0s</div><div class="qs-label">Talk</div></div>
+          <div class="qs-cell"><div class="qs-val" id="qs-rate" style="color:var(--orange)">0%</div><div class="qs-label">Rate</div></div>
+        </div>
+      </div>
+      <div class="info-section" style="flex:1">
+        <div class="info-section-title"><i class="fas fa-phone-missed"></i> Callbacks</div>
+        {% if pending_callbacks %}
+          {% for cb in pending_callbacks %}
+          <div class="callback-item">
+            <label>{{ cb.callback_at|date:"M d, H:i" }}</label>
+            <strong>{{ cb.lead.full_name|default:"--" }} &mdash; {{ cb.lead.primary_phone|default:"--" }}</strong>
+          </div>
+          {% endfor %}
+        {% else %}
+          <p style="color:var(--text-muted);font-size:.78rem">No pending callbacks.</p>
+        {% endif %}
+      </div>
+    </aside>
+  </main>
+</div>
+
+<!-- Disposition overlay -->
+<div id="disposition-overlay">
+  <div class="disp-modal">
+    <h3><i class="fas fa-clipboard-check" style="color:var(--wrapup)"></i> Select Disposition</h3>
+    <p class="disp-subtitle" id="disp-subtitle">Select a disposition to complete this call.</p>
+    <div class="disp-grid" id="disp-grid"></div>
+    <textarea class="disp-notes" id="disp-notes" placeholder="Add call notes (optional)..."></textarea>
+    <div id="callback-dt-row" style="display:none;margin-bottom:14px">
+      <label style="display:block;font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">Callback Date / Time</label>
+      <input type="datetime-local" id="callback-at" style="width:100%;background:var(--card-light);border:1px solid var(--border);border-radius:var(--radius-xs);padding:9px 12px;color:var(--text);font-size:.82rem;outline:none">
     </div>
+    <button class="disp-save-btn" id="btn-save-disp" disabled><i class="fas fa-save"></i> Save Disposition</button>
+    <p style="text-align:center;color:var(--text-muted);font-size:.7rem;margin-top:12px">This dialog cannot be dismissed until a disposition is selected.</p>
   </div>
 </div>
 
-<!-- DISPOSITION OVERLAY -->
-<div class="disposition-overlay" id="dispOverlay">
-  <div class="disposition-modal">
-    <div class="disposition-title">Dispose Call</div>
-    <div class="disposition-subtitle" id="dispSubtitle">Select outcome for this call</div>
+<div id="toast"></div>
+<audio id="remote-audio" autoplay playsinline></audio>
 
-    <div class="wrapup-timer" id="wrapupTimer" style="display:none">
-      Auto-wrapup in <span class="wrapup-countdown" id="wrapupCountdown">—</span>
-      <div class="wrapup-bar mt-1">
-        <div class="wrapup-bar-fill" id="wrapupBarFill" style="width:100%"></div>
-      </div>
-    </div>
-
-    <div class="disposition-grid" id="dispGrid"></div>
-
-    <div class="form-group">
-      <label class="form-label">Notes</label>
-      <textarea id="dispNotes" class="form-input" rows="2"
-                placeholder="Optional notes…" style="resize:none"></textarea>
-    </div>
-
-    <div id="callbackRow" style="display:none" class="form-group">
-      <label class="form-label">Callback date/time</label>
-      <input type="datetime-local" id="callbackAt" class="form-input">
-    </div>
-
-    <button class="btn btn-primary w-full btn-lg" id="btnDispose"
-            onclick="Agent.submitDisposition()" disabled>
-      Submit Disposition
-    </button>
-  </div>
-</div>
-
-<!-- Hidden audio for WebRTC -->
-<audio id="remoteAudio" autoplay playsinline></audio>
-{% endblock %}
-
-{% block extra_js %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jssip/3.10.0/jssip.min.js"></script>
-<script src="/static/js/agent.js"></script>
+<script src="{% static 'js/jssip.min.js' %}"></script>
+<script src="{% static 'js/app.js' %}"></script>
 <script>
-// Inject server-rendered config, then boot the Agent module
-document.addEventListener('DOMContentLoaded', () => {
-  Agent.init({
-    wsUrl:       '{{ webrtc_config.ws_url|escapejs }}',
-    sipUri:      '{{ webrtc_config.sip_uri|escapejs }}',
-    extension:   '{{ webrtc_config.extension|escapejs }}',
-    password:    '{{ webrtc_config.password|escapejs }}',
-    domain:      '{{ webrtc_config.domain|escapejs }}',
-    displayName: '{{ webrtc_config.display_name|escapejs }}',
-    stun:        '{{ webrtc_config.stun|escapejs }}',
+(function(){
+  'use strict';
+  const CSRF = '{{ csrf_token }}';
+  const CFG  = { ws:'{{ webrtc_config.ws_url|escapejs }}', uri:'{{ webrtc_config.sip_uri|escapejs }}', pw:'{{ webrtc_config.password|escapejs }}', domain:'{{ webrtc_config.domain|escapejs }}', name:'{{ webrtc_config.display_name|escapejs }}' };
+  const ICE  = [{ urls: '{{ webrtc_config.stun|default:"stun:stun.l.google.com:19302" }}' }];
+
+  let ua=null,session=null,dialNum='',callSec=0,callTimer=null;
+  let muted=false,held=false,autoAns=true;
+  let callId=null,inWrapup=false,selDispId=null;
+  let wsConn=null,wsDelay=1000;
+  let statusSince=new Date('{{ agent_status.status_changed_at.isoformat }}');
+  let loginSince=new Date();
+  let tickId=null;
+
+  const $=id=>document.getElementById(id);
+  const btnCall=$('btn-call'),btnHang=$('btn-hangup'),btnMute=$('btn-mute'),btnHold=$('btn-hold'),btnXfer=$('btn-transfer'),btnClear=$('btn-clear');
+  const wDot=$('webrtc-dot'),wText=$('webrtc-status-text');
+  const remAudio=$('remote-audio');
+  const callBadge=$('call-badge');
+  const dispOverlay=$('disposition-overlay');
+  const wrapupBar=$('wrapup-bar');
+
+  function toast(msg,type='info'){
+    const el=$('toast'); el.textContent=msg; el.className='show '+type;
+    clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),3500);
+  }
+
+  function post(url,data={}){
+    return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},body:JSON.stringify(data)}).then(r=>r.json()).catch(()=>({}));
+  }
+
+  /* ── WebSocket ── */
+  function connectWS(){
+    const proto=location.protocol==='https:'?'wss:':'ws:';
+    wsConn=new WebSocket(`${proto}//${location.host}/ws/agent/`);
+    wsConn.onopen=()=>{$('ws-status-text').textContent='Connected';$('ws-status-text').style.color='var(--success)';wsDelay=1000;};
+    wsConn.onmessage=e=>{try{handle(JSON.parse(e.data));}catch(_){}};
+    wsConn.onclose=()=>{$('ws-status-text').textContent='Disconnected';$('ws-status-text').style.color='var(--danger)';setTimeout(connectWS,wsDelay);wsDelay=Math.min(wsDelay*1.5,30000);};
+  }
+  function wsSend(d){if(wsConn?.readyState===1)wsConn.send(JSON.stringify(d));}
+
+  function handle(d){
+    const t=d.type;
+    if(t==='snapshot')       applySnapshot(d);
+    else if(t==='status_changed')  applyStatus(d);
+    else if(t==='call_incoming')   onIncoming(d);
+    else if(t==='call_connected')  onConnected(d);
+    else if(t==='call_ended')      onEnded(d);
+    else if(t==='wrapup_timeout_warning') toast('Auto-wrapup in '+d.seconds_remaining+'s','warning');
+    else if(t==='wrapup_expired')  {toast('Auto-wrapup: '+d.disposition_applied,'info');closeWrapup();}
+    else if(t==='dispose_ok')      {closeWrapup();toast('Disposition saved','success');}
+    else if(t==='force_logout')    {toast(d.reason||'Logged out by supervisor','warning');setTimeout(()=>{location.href='/auth/logout/';},2500);}
+  }
+
+  function applySnapshot(d){
+    applyStatus({status:d.status,display:d.status_display,since:d.status_since});
+    if(d.dispositions?.length)renderDispositions(d.dispositions);
+    if(d.stats_today)updateStats(d.stats_today);
+    if(d.status==='wrapup'&&d.pending_call){callId=String(d.pending_call.id);enterWrapup(d.pending_call);}
+    document.querySelectorAll('[data-set-status]').forEach(b=>b.disabled=false);
+    loadHistory();
+  }
+
+  function applyStatus(d){
+    const st=d.status||'offline';
+    statusSince=d.since?new Date(d.since):new Date();
+    const pill=$('status-pill');
+    if(pill){pill.textContent=d.display||tc(st);pill.className='status-pill '+st;}
+    document.querySelectorAll('[data-set-status]').forEach(b=>b.classList.toggle('is-active',b.dataset.setStatus===st));
+    $('status-since-text').textContent=d.display||tc(st);
+  }
+
+  function onIncoming(d){
+    callId=d.call_id; showCall(d.lead||{},'ringing');
+    renderLead(d.lead||{});
+    if(d.campaign)$('call-meta-camp').textContent=d.campaign.name||'--';
+    if(autoAns&&session)setTimeout(()=>answerSession(),700);
+  }
+  function onConnected(d){callId=d.call_id;showCall(d.lead||{},'connected');startCallTimer();renderLead(d.lead||{});}
+  function onEnded(d){stopCallTimer();callId=d.call_id||callId;if(d.needs_disposition&&callId)enterWrapup(null);else resetCall();}
+
+  function showCall(lead,state){
+    $('call-placeholder').style.display='none';
+    $('call-details').classList.add('visible');
+    const n=[lead.first_name,lead.last_name].filter(Boolean).join(' ')||lead.phone||'--';
+    $('call-lead-name').textContent=n;
+    $('call-lead-sub').textContent=lead.phone||'--';
+    $('call-meta-phone').textContent=lead.phone||'--';
+    $('call-meta-status').textContent=tc(state);
+    callBadge.className='call-badge '+state;
+    callBadge.innerHTML='<i class="fas fa-circle"></i> '+tc(state);
+    [btnHang,btnMute,btnHold,btnXfer].forEach(b=>{if(b)b.disabled=false;});
+  }
+
+  function resetCall(){
+    stopCallTimer();
+    $('call-placeholder').style.display='';
+    $('call-details').classList.remove('visible');
+    callBadge.className='call-badge idle';
+    callBadge.innerHTML='<i class="fas fa-circle"></i> Idle';
+    [btnHang,btnMute,btnHold,btnXfer].forEach(b=>{if(b)b.disabled=true;});
+    callId=null;muted=false;held=false;
+    $('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'DISCONNECTED';
+    $('phone-timer').style.display='none';
+    $('phone-num-disp').textContent='';
+  }
+
+  function startCallTimer(){stopCallTimer();callSec=0;$('phone-timer').style.display='';$('phone-status-disp').textContent='CONNECTED';callTimer=setInterval(()=>{callSec++;const t=fmt(callSec);$('phone-timer').textContent=t;$('call-meta-dur').textContent=t;},1000);}
+  function stopCallTimer(){clearInterval(callTimer);callTimer=null;}
+
+  function enterWrapup(ci){
+    inWrapup=true;selDispId=null;$('btn-save-disp').disabled=true;
+    if(ci){const n=ci.lead_name||ci.first_name||'--';$('disp-subtitle').textContent='Call with '+n+' · '+fmt(ci.duration||0);}
+    const notesEl=$('call-notes');if(notesEl)$('disp-notes').value=notesEl.value;
+    resetCall();
+    dispOverlay.classList.add('visible');
+    wrapupBar.classList.add('visible');
+  }
+  function closeWrapup(){inWrapup=false;dispOverlay.classList.remove('visible');wrapupBar.classList.remove('visible');}
+  window.openDisposition=function(){dispOverlay.classList.add('visible');};
+
+  function renderDispositions(disps){
+    const g=$('disp-grid');if(!g)return;
+    g.innerHTML=disps.map(d=>`<button class="disp-btn" data-disp-id="${d.id}" onclick="selectDisp(${d.id},'${(d.name||'').replace(/'/g,"\'")}','${d.outcome||''}',this)"><span class="disp-color" style="background:${d.color}"></span>${d.name}${d.hotkey?`<span class="disp-hotkey">${d.hotkey.toUpperCase()}</span>`:''}</button>`).join('');
+  }
+
+  window.selectDisp=function(id,name,outcome,btn){
+    selDispId=id;
+    document.querySelectorAll('.disp-btn').forEach(b=>b.classList.remove('selected'));
+    btn.classList.add('selected');
+    $('btn-save-disp').disabled=false;
+    $('callback-dt-row').style.display=outcome==='callback'?'':'none';
+  };
+
+  $('btn-save-disp').onclick=function(){
+    if(!selDispId||!callId)return;
+    this.disabled=true;
+    wsSend({action:'dispose',disposition_id:parseInt(selDispId),call_log_id:parseInt(callId),notes:$('disp-notes').value.trim(),callback_at:$('callback-at').value||null});
+  };
+
+  document.addEventListener('keydown',e=>{
+    if(!inWrapup)return;
+    if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT')return;
+    document.querySelectorAll('.disp-btn').forEach(btn=>{const hk=btn.querySelector('.disp-hotkey')?.textContent;if(hk&&e.key.toUpperCase()===hk)btn.click();});
+    if(e.key==='Enter'&&!$('btn-save-disp').disabled)$('btn-save-disp').click();
   });
-});
+
+  function renderLead(lead){
+    const g=$('lead-info-grid');if(!g)return;
+    const fields=[['Phone',lead.phone||lead.primary_phone],['Email',lead.email],['Company',lead.company],['City',[lead.city,lead.state].filter(Boolean).join(', ')],['Source',lead.source]].filter(([,v])=>v);
+    g.innerHTML=fields.length?fields.map(([l,v])=>`<div class="lead-info-row"><span class="lead-info-label">${l}</span><span class="lead-info-val">${v}</span></div>`).join(''):'<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:.82rem">No lead details.</div>';
+  }
+
+  function updateStats(s){
+    const tot=s.calls||s.total||0,ans=s.answered||0,talk=s.talk_sec||0,rate=tot>0?Math.round(ans/tot*100):0;
+    ['stat-total','qs-total'].forEach(id=>{const el=$(id);if(el)el.textContent=tot;});
+    ['stat-answered','qs-answered'].forEach(id=>{const el=$(id);if(el)el.textContent=ans;});
+    ['stat-talk','qs-talk'].forEach(id=>{const el=$(id);if(el)el.textContent=fmt(talk);});
+    ['stat-rate','qs-rate'].forEach(id=>{const el=$(id);if(el)el.textContent=rate+'%';});
+  }
+
+  function loadHistory(){
+    fetch('/agents/api/call-history/').then(r=>r.json()).then(d=>{
+      const el=$('recent-calls-list');if(!el)return;
+      if(!d.calls?.length){el.textContent='No recent calls.';return;}
+      el.innerHTML=d.calls.slice(0,10).map(c=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)"><div><div style="font-weight:600;font-size:.82rem">${c.lead_name||c.phone}</div><div style="font-size:.72rem;color:var(--text-muted)">${c.campaign||''}</div></div><div style="text-align:right"><span class="badge badge-${c.status}" style="font-size:.65rem">${c.status}</span><div style="font-size:.7rem;color:var(--text-muted);margin-top:2px">${c.duration?fmt(c.duration):'--'}</div></div></div>`).join('');
+    }).catch(()=>{});
+  }
+
+  /* ── Timers ── */
+  function startTimers(){
+    clearInterval(tickId);
+    tickId=setInterval(()=>{
+      const sec=Math.floor((Date.now()-statusSince.getTime())/1000);
+      const el=$('status-timer');if(el)el.textContent=fmt(sec);
+      const loginSec=Math.floor((Date.now()-loginSince.getTime())/1000);
+      const el2=$('session-timer');if(el2)el2.textContent=fmt(loginSec);
+    },1000);
+  }
+
+  /* ── Heartbeat ── */
+  function startHB(){setInterval(()=>{wsSend({action:'heartbeat'});post('/agents/api/heartbeat/');},25000);}
+
+  /* ── JsSIP ── */
+  function initRTC(){
+    if(!CFG.uri||!CFG.ws){setRTC('failed','No extension');return;}
+    try{
+      const sock=new JsSIP.WebSocketInterface(CFG.ws);
+      ua=new JsSIP.UA({sockets:[sock],uri:CFG.uri,password:CFG.pw,display_name:CFG.name,register:true,session_timers:false});
+      ua.on('registered',()=>{setRTC('registered','Registered');if(dialNum)btnCall.disabled=false;});
+      ua.on('unregistered',()=>setRTC('failed','Unregistered'));
+      ua.on('registrationFailed',ev=>setRTC('failed','Failed: '+(ev.cause||'')));
+      ua.on('newRTCSession',ev=>handleSession(ev.session));
+      ua.start();setRTC('connecting','Connecting...');
+    }catch(e){setRTC('failed','Error: '+e.message);}
+  }
+
+  function setRTC(state,text){
+    wDot.className='webrtc-dot '+state;wText.textContent=text;
+    wText.style.color=state==='registered'?'var(--success)':state==='failed'?'var(--danger)':'var(--warning)';
+    const rtcEl=$('rtc-status-text');if(rtcEl){rtcEl.textContent=text;rtcEl.style.color=wText.style.color;}
+  }
+
+  function handleSession(s){
+    if(session){s.terminate({status_code:486});return;}
+    session=s;
+    s.on('peerconnection',pc=>{pc.peerconnection.addEventListener('track',ev=>{if(ev.streams?.[0])remAudio.srcObject=ev.streams[0];});});
+    s.on('progress',()=>{const dir=s.direction;$('phone-status-disp').textContent=dir==='incoming'?autoAns?'AUTO-ANSWERING...':'INCOMING...':'RINGING...';if(dir==='incoming'&&autoAns)setTimeout(answerSession,700);});
+    s.on('accepted',()=>{$('phone-status-disp').textContent='CONNECTED';btnCall.disabled=true;btnHang.disabled=false;});
+    s.on('ended',()=>{session=null;$('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'ENDED';});
+    s.on('failed',()=>{session=null;$('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'FAILED';});
+  }
+
+  function answerSession(){if(!session)return;session.answer({mediaConstraints:{audio:true,video:false},pcConfig:{iceServers:ICE}});}
+  function makeCall(){if(!ua?.isRegistered()||!dialNum)return;session=ua.call('sip:'+dialNum+'@'+CFG.domain,{mediaConstraints:{audio:true,video:false},pcConfig:{iceServers:ICE}});}
+  function hangupCall(){if(session){session.terminate();session=null;}wsSend({action:'hangup',channel_id:null});}
+  function toggleMute(){muted=!muted;session?.connection?.getSenders()?.forEach(s=>{if(s.track?.kind==='audio')s.track.enabled=!muted;});btnMute?.classList.toggle('active',muted);toast(muted?'Muted':'Unmuted','info');}
+  function toggleHold(){held=!held;held?session?.hold():session?.unhold();btnHold?.classList.toggle('active',held);toast(held?'On Hold':'Resumed','info');}
+  function updNum(){$('phone-num-disp').textContent=dialNum;if(btnCall)btnCall.disabled=!dialNum||!ua?.isRegistered();}
+  window.saveNotes=function(){toast('Notes saved locally','success');};
+
+  /* ── Theme ── */
+  const html=document.documentElement;
+  const applyTheme=t=>{html.setAttribute('data-theme',t);localStorage.setItem('df_theme',t);$('theme-icon').className=t==='dark'?'fas fa-moon':'fas fa-sun';};
+  applyTheme(localStorage.getItem('df_theme')||'dark');
+  $('theme-toggle').onclick=()=>applyTheme(html.getAttribute('data-theme')==='dark'?'light':'dark');
+
+  /* ── Tabs ── */
+  document.querySelectorAll('.tab-btn').forEach(b=>{
+    b.onclick=function(){
+      document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(x=>x.classList.remove('active'));
+      this.classList.add('active');
+      const p=$('tab-'+this.dataset.tab);if(p)p.classList.add('active');
+      if(this.dataset.tab==='history')loadHistory();
+    };
+  });
+
+  /* ── Keypad ── */
+  document.querySelectorAll('.phone-key').forEach(k=>{k.onclick=function(){const d=this.dataset.digit;dialNum+=d;updNum();if(session?.isEstablished())session.sendDTMF(d);};});
+
+  /* ── Controls ── */
+  btnCall.onclick=()=>session?answerSession():makeCall();
+  btnHang.onclick=hangupCall;
+  btnMute.onclick=toggleMute;
+  btnHold.onclick=toggleHold;
+  btnClear.onclick=()=>{dialNum='';updNum();};
+  btnXfer.onclick=()=>{if(!session)return;const t=prompt('Enter transfer extension:');if(t){try{session.refer('sip:'+t+'@'+CFG.domain);toast('Transferring...','info');}catch(e){toast('Transfer failed','error');}}};
+
+  $('auto-answer-toggle').onchange=function(){autoAns=this.checked;toast('Auto-answer '+(autoAns?'ON':'OFF'),'info');};
+
+  /* ── Status chips ── */
+  document.querySelectorAll('[data-set-status]').forEach(b=>{b.onclick=function(){if(inWrapup){openDisposition();return;}wsSend({action:'set_status',status:this.dataset.setStatus});};});
+
+  const campSel=$('campaign-select');
+  if(campSel)campSel.onchange=function(){if(this.value)wsSend({action:'set_campaign',campaign_id:parseInt(this.value)});};
+
+  /* ── Logout ── */
+  $('logout-btn')?.addEventListener('click',e=>{if(inWrapup){e.preventDefault();openDisposition();$('logout-banner').classList.add('visible');setTimeout(()=>$('logout-banner').classList.remove('visible'),3000);}});
+
+  /* ── Keyboard ── */
+  document.addEventListener('keydown',e=>{
+    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+    if('0123456789*#'.includes(e.key)){dialNum+=e.key;updNum();if(session?.isEstablished())session.sendDTMF(e.key);}
+    if(e.key==='Backspace'){e.preventDefault();dialNum=dialNum.slice(0,-1);updNum();}
+    if(e.key==='Enter'&&dialNum&&ua?.isRegistered()&&!session)makeCall();
+    if(e.key==='Escape'&&session)hangupCall();
+  });
+
+  /* ── Helpers ── */
+  function fmt(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;return h?h+':'+pad(m)+':'+pad(s):pad(m)+':'+pad(s);}
+  function pad(n){return String(n).padStart(2,'0');}
+  function tc(s){return(s||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
+
+  /* ── Boot ── */
+  document.addEventListener('DOMContentLoaded',()=>{
+    connectWS();initRTC();startHB();startTimers();
+  });
+})();
 </script>
-{% endblock %}
+</body>
+</html>

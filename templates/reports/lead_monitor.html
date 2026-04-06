@@ -1,0 +1,324 @@
+{% extends "base/base.html" %}
+{% block title %}Lead Monitor — DialFlow Pro{% endblock %}
+{% block nav_reports %}active{% endblock %}
+
+{% block topbar_right %}
+<div style="display:flex;align-items:center;gap:8px;font-size:12.5px">
+  <div style="width:7px;height:7px;border-radius:50%;background:var(--success);animation:pulse 2s infinite"></div>
+  <span id="last-updated" class="text-muted">Live</span>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Lead Monitor</div>
+    <div class="page-subtitle">Real-time view of leads being dialed across all campaigns</div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <select id="campaignFilter" class="form-input" style="width:200px" onchange="filterByCampaign()">
+      <option value="">All Campaigns</option>
+      {% for c in campaigns %}
+      <option value="{{ c.id }}">{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+<!-- Live summary cards -->
+<div class="stat-grid grid-4 mb-6">
+  <div class="stat-card" style="border-left:3px solid var(--info)">
+    <label>Dialing Now</label>
+    <strong id="m-dialing" style="color:var(--info)">0</strong>
+  </div>
+  <div class="stat-card" style="border-left:3px solid var(--success)">
+    <label>Answered</label>
+    <strong id="m-answered" style="color:var(--success)">0</strong>
+  </div>
+  <div class="stat-card" style="border-left:3px solid var(--warning)">
+    <label>In Hopper</label>
+    <strong id="m-queued" style="color:var(--warning)">0</strong>
+  </div>
+  <div class="stat-card" style="border-left:3px solid var(--accent)">
+    <label>Completed Today</label>
+    <strong id="m-completed">0</strong>
+  </div>
+</div>
+
+<!-- Two-column layout -->
+<div style="display:grid;grid-template-columns:1fr 360px;gap:16px">
+
+  <!-- Left: Live dialing feed -->
+  <div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">
+          <i class="fa-solid fa-phone-volume" style="color:var(--accent)"></i>
+          Live Calls
+        </span>
+        <span class="badge badge-active" id="live-count-badge">0 active</span>
+      </div>
+
+      <!-- Filter tabs -->
+      <div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm lead-filter-btn active" data-filter="all">All</button>
+        <button class="btn btn-secondary btn-sm lead-filter-btn" data-filter="dialing" style="border-color:var(--info);color:var(--info)">Dialing</button>
+        <button class="btn btn-secondary btn-sm lead-filter-btn" data-filter="answered" style="border-color:var(--success);color:var(--success)">Answered</button>
+        <button class="btn btn-secondary btn-sm lead-filter-btn" data-filter="ringing">Ringing</button>
+      </div>
+
+      <div id="live-calls-feed" style="max-height:520px;overflow-y:auto">
+        <div style="padding:40px;text-align:center;color:var(--text-muted)">
+          <i class="fa-solid fa-satellite-dish" style="font-size:2rem;display:block;margin-bottom:12px;opacity:.4"></i>
+          Connecting to live feed…
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Campaign hopper stats + recent -->
+  <div>
+    <div class="card mb-4">
+      <div class="card-header">
+        <span class="card-title">Campaign Hoppers</span>
+        <a href="{% url 'reports:home' %}" class="btn btn-ghost btn-sm">Full Report</a>
+      </div>
+      <div id="hopper-stats-list" style="padding:0">
+        {% for camp in campaigns %}
+        <div class="hopper-row" id="hopper-{{ camp.id }}" style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ camp.name }}</div>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">
+              <span class="badge badge-{{ camp.status }}" style="font-size:10px">{{ camp.status }}</span>
+            </div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:16px;font-weight:700;font-family:var(--font-mono)" id="hq-{{ camp.id }}">—</div>
+            <div style="font-size:10px;color:var(--text-muted)">in hopper</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:16px;font-weight:700;font-family:var(--font-mono);color:var(--info)" id="hf-{{ camp.id }}">—</div>
+            <div style="font-size:10px;color:var(--text-muted)">dialing</div>
+          </div>
+        </div>
+        {% empty %}
+        <div style="padding:24px;text-align:center;color:var(--text-muted)">No campaigns.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><span class="card-title">AMD Statistics</span></div>
+      <div class="card-body">
+        <div style="display:flex;flex-direction:column;gap:10px" id="amd-stats">
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <span class="text-muted">Human answered</span>
+            <span id="amd-human" style="font-weight:700;font-family:var(--font-mono)">—</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <span class="text-muted">Machine detected</span>
+            <span id="amd-machine" style="font-weight:700;font-family:var(--font-mono);color:var(--warning)">—</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:13px">
+            <span class="text-muted">Machine rate</span>
+            <span id="amd-rate" style="font-weight:700;font-family:var(--font-mono);color:var(--accent)">—%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.lead-monitor-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  transition: background .15s;
+}
+.lead-monitor-row:hover { background: var(--bg-sec); }
+.lead-monitor-row:last-child { border-bottom: none; }
+.lm-status {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.lm-status.dialing { background: var(--info); animation: dot-pulse 1.5s infinite; }
+.lm-status.answered { background: var(--success); }
+.lm-status.ringing  { background: var(--warning); animation: dot-pulse 1s infinite; }
+.lm-status.completed { background: var(--border); }
+.lm-duration {
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--text-muted); white-space: nowrap;
+}
+.lead-filter-btn { min-width: 60px; }
+.lead-filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+</style>
+
+<script>
+let currentFilter = 'all';
+let currentCampaign = '';
+let wsLead = null;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  wsLead = new WebSocket(`${proto}//${location.host}/ws/supervisor/`);
+
+  wsLead.onopen = () => {
+    document.getElementById('last-updated').textContent = 'Connected';
+  };
+
+  wsLead.onmessage = e => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.type === 'snapshot')        applySnapshot(data);
+      else if (data.type === 'lead_update') applyLeadUpdate(data);
+      else if (data.type === 'campaign_stats') updateHopper(data);
+    } catch (_) {}
+    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  };
+
+  wsLead.onclose = () => {
+    document.getElementById('last-updated').textContent = 'Reconnecting…';
+    setTimeout(connectWS, 2000);
+  };
+}
+
+function applySnapshot(data) {
+  // Build live calls from agents on_call
+  const calls = (data.agents || []).filter(a => a.status === 'on_call');
+  renderLiveCalls(calls.map(a => ({
+    status: 'answered',
+    phone:  a.active_phone || '—',
+    name:   a.full_name || a.user__username,
+    campaign: (data.campaigns || []).find(c => c.id === a.active_campaign_id)?.name || '—',
+    duration: 0,
+  })));
+
+  updateSummary({ dialing: 0, answered: calls.length, queued: 0, completed: 0 });
+  updateCampaignHoppers(data.campaigns || []);
+}
+
+function applyLeadUpdate(data) {
+  const row = document.getElementById(`llrow-${data.channel_id}`);
+  if (row) {
+    row.querySelector('.lm-status').className = `lm-status ${data.status}`;
+  }
+}
+
+function updateHopper(data) {
+  const q = document.getElementById(`hq-${data.campaign_id}`);
+  const f = document.getElementById(`hf-${data.campaign_id}`);
+  if (q) q.textContent = data.queued ?? '—';
+  if (f) f.textContent = data.in_flight ?? '—';
+
+  // Update AMD stats
+  if (data.amd_human !== undefined) {
+    document.getElementById('amd-human').textContent   = data.amd_human;
+    document.getElementById('amd-machine').textContent = data.amd_machine;
+    document.getElementById('amd-rate').textContent    = (data.amd_rate || 0).toFixed(1) + '%';
+  }
+}
+
+function updateCampaignHoppers(campaigns) {
+  campaigns.forEach(c => {
+    const q = document.getElementById(`hq-${c.id}`);
+    const f = document.getElementById(`hf-${c.id}`);
+    if (q) q.textContent = c.stat_calls_today || 0;
+    if (f) f.textContent = c.stat_agents_active || 0;
+  });
+}
+
+function updateSummary(s) {
+  document.getElementById('m-dialing').textContent   = s.dialing   || 0;
+  document.getElementById('m-answered').textContent  = s.answered  || 0;
+  document.getElementById('m-queued').textContent    = s.queued    || 0;
+  document.getElementById('m-completed').textContent = s.completed || 0;
+}
+
+function renderLiveCalls(calls) {
+  const feed     = document.getElementById('live-calls-feed');
+  const filtered = calls.filter(c => {
+    if (currentFilter !== 'all' && c.status !== currentFilter) return false;
+    if (currentCampaign && c.campaign_id !== parseInt(currentCampaign)) return false;
+    return true;
+  });
+
+  document.getElementById('live-count-badge').textContent = filtered.length + ' active';
+
+  if (!filtered.length) {
+    feed.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)"><i class="fa-solid fa-phone-slash" style="font-size:2rem;display:block;margin-bottom:12px;opacity:.3"></i>No active calls matching filter.</div>';
+    return;
+  }
+
+  feed.innerHTML = filtered.map(c => `
+    <div class="lead-monitor-row" id="llrow-${c.channel_id || Math.random()}">
+      <div class="lm-status ${c.status}"></div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13.5px;font-weight:600;color:var(--text)">
+          ${c.name || 'Unknown Lead'}
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);font-family:var(--font-mono)">${c.phone || '—'}</div>
+      </div>
+      <div style="text-align:center">
+        <div class="lead-status-pill ${c.status}">${titleCase(c.status)}</div>
+        <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px">${c.campaign || '—'}</div>
+      </div>
+      <div class="lm-duration">${c.duration ? fmt(c.duration) : '—'}</div>
+    </div>`).join('');
+}
+
+// Filter buttons
+document.querySelectorAll('.lead-filter-btn').forEach(btn => {
+  btn.onclick = function() {
+    document.querySelectorAll('.lead-filter-btn').forEach(b => b.classList.remove('active'));
+    this.classList.add('active');
+    currentFilter = this.dataset.filter;
+  };
+});
+
+function filterByCampaign() {
+  currentCampaign = document.getElementById('campaignFilter').value;
+}
+
+function fmt(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const m = Math.floor(sec/60), s = sec%60;
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+function titleCase(s) {
+  return (s||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+}
+
+// Also poll REST for hopper stats (in case WS misses some)
+async function pollHopperStats() {
+  try {
+    const res  = await fetch('/campaigns/api/hopper-stats/');
+    const data = await res.json();
+    if (data.campaigns) {
+      let totalQueued = 0, totalFlight = 0;
+      data.campaigns.forEach(c => {
+        const q = document.getElementById(`hq-${c.id}`);
+        const f = document.getElementById(`hf-${c.id}`);
+        if (q) q.textContent = c.queued;
+        if (f) f.textContent = c.in_flight;
+        totalQueued += c.queued || 0;
+        totalFlight += c.in_flight || 0;
+      });
+      document.getElementById('m-queued').textContent  = totalQueued;
+      document.getElementById('m-dialing').textContent = totalFlight;
+    }
+    if (data.amd) {
+      document.getElementById('amd-human').textContent   = data.amd.human || 0;
+      document.getElementById('amd-machine').textContent = data.amd.machine || 0;
+      document.getElementById('amd-rate').textContent    = (data.amd.rate || 0).toFixed(1) + '%';
+    }
+  } catch (_) {}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  connectWS();
+  pollHopperStats();
+  setInterval(pollHopperStats, 5000);
+});
+</script>
+{% endblock %}

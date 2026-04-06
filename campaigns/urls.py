@@ -35,4 +35,7 @@ urlpatterns = [
 
     # Callbacks
     path('callbacks/',                  views.callback_list,      name='callbacks'),
+
+    # Monitoring APIs
+    path('api/hopper-stats/',           views.hopper_stats_api_all, name='hopper_stats_api'),
 ]

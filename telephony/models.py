@@ -82,7 +82,7 @@ class Carrier(TimestampedModel):
         ordering = ['name']
 
     def __str__(self):
-        return f'{self.name} → {self.host}'
+        return f'{self.name} -> {self.host}'
 
 
 # ─── PJSIP Realtime Tables (Asterisk reads these directly) ───────────────────
