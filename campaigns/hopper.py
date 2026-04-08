@@ -25,7 +25,7 @@ from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q
 
-logger = logging.getLogger('dialflow')
+logger = logging.getLogger('dialflow.dialer')
 
 # ── Redis connection (singleton) ──────────────────────────────────────────────
 _redis: Optional[redis_lib.Redis] = None
@@ -64,6 +64,7 @@ def fill_hopper(campaign_id: int, target: int = None) -> int:
             id=campaign_id, status=Campaign.STATUS_ACTIVE
         )
     except Campaign.DoesNotExist:
+        logger.debug(f'Hopper fill skipped: campaign={campaign_id} not active or missing')
         return 0
 
     r   = get_redis()
@@ -73,6 +74,9 @@ def fill_hopper(campaign_id: int, target: int = None) -> int:
     target_count  = target or campaign.hopper_level
 
     if current_count >= target_count:
+        logger.debug(
+            f'Hopper fill skipped: campaign={campaign_id} current={current_count} target={target_count}'
+        )
         return 0
 
     needed = target_count - current_count
@@ -122,6 +126,11 @@ def fill_hopper(campaign_id: int, target: int = None) -> int:
         'oldest':     ['created_at'],
     }
     lead_qs = lead_qs.order_by(*order_map.get(campaign.lead_order, ['id']))
+    available_count = lead_qs.count()
+    logger.debug(
+        f'Hopper fill candidates: campaign={campaign_id} needed={needed} available={available_count} '
+        f'current={current_count} target={target_count}'
+    )
 
     # Push to Redis
     added = 0
@@ -148,7 +157,9 @@ def fill_hopper(campaign_id: int, target: int = None) -> int:
     pipe.execute()
 
     if added:
-        logger.debug(f'Hopper fill: campaign {campaign_id} +{added} leads (total={current_count + added})')
+        logger.info(f'Hopper fill: campaign={campaign_id} added={added} total={current_count + added}')
+    else:
+        logger.debug(f'Hopper fill made no changes: campaign={campaign_id}')
 
     return added
 
@@ -177,6 +188,7 @@ def pop_lead(campaign_id: int) -> Optional[Dict]:
     key = hopper_key(campaign_id)
     raw = r.lpop(key)
     if not raw:
+        logger.debug(f'Hopper pop empty: campaign={campaign_id}')
         return None
 
     data = json.loads(raw)
@@ -185,7 +197,7 @@ def pop_lead(campaign_id: int) -> Optional[Dict]:
     # TTL safety: auto-clean after 5 minutes if ARI never reports completion
     r.expire(dialing_key(campaign_id), 300)
 
-    logger.debug(f'Hopper pop: campaign {campaign_id} → lead {data["lead_id"]}')
+    logger.info(f'Hopper pop: campaign={campaign_id} lead={data["lead_id"]} phone={data.get("phone")}')
     return data
 
 
@@ -229,3 +241,23 @@ def reset_stale_dialing(campaign_id: int, max_age_seconds: int = 300):
         logger.warning(f'Reset {len(stale)} stale dialing entries for campaign {campaign_id}')
 
     return len(stale)
+
+
+def force_reset_dialing(campaign_id: int) -> int:
+    """
+    Force-move every in-flight dialing entry back to the hopper.
+    Intended for manual operator recovery when the dialing hash gets stuck.
+    """
+    r = get_redis()
+    dialing_entries = r.hgetall(dialing_key(campaign_id))
+    if not dialing_entries:
+        logger.debug(f'Force reset dialing: campaign={campaign_id} no entries')
+        return 0
+
+    pipe = r.pipeline()
+    for lead_id, raw in dialing_entries.items():
+        pipe.hdel(dialing_key(campaign_id), lead_id)
+        pipe.rpush(hopper_key(campaign_id), raw)
+    pipe.execute()
+    logger.warning(f'Force reset dialing: campaign={campaign_id} reset={len(dialing_entries)}')
+    return len(dialing_entries)

@@ -3,7 +3,7 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 
-logger = logging.getLogger('dialflow')
+logger = logging.getLogger('dialflow.dialer')
 
 
 @shared_task(name='campaigns.tasks.predictive_dial_tick', max_retries=0)
@@ -19,12 +19,14 @@ def predictive_dial_tick():
     for campaign in Campaign.objects.filter(status=Campaign.STATUS_ACTIVE):
         try:
             count = get_calls_to_dial(campaign.id)
+            logger.debug(f'Predictive tick: campaign={campaign.id} computed_to_dial={count}')
             if count > 0:
                 initiated = originate_calls(campaign.id, count)
                 total += initiated
         except Exception as e:
             logger.error(f'Predictive dial tick failed for campaign {campaign.id}: {e}')
 
+    logger.info(f'Predictive tick summary: initiated={total}')
     return {'initiated': total, 'ts': timezone.now().isoformat()}
 
 
@@ -36,6 +38,8 @@ def fill_all_hoppers():
     total   = sum(results.values())
     if total:
         logger.info(f'Hopper fill: +{total} leads across {len(results)} campaigns')
+    else:
+        logger.debug('Hopper fill summary: no leads added')
     return results
 
 

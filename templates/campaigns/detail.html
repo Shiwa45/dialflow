@@ -13,7 +13,9 @@
   </div>
   <div style="display:flex;gap:8px">
     {% if campaign.status != 'active' %}
-    <button class="btn btn-success" onclick="ctrl('start')"><i class="fa-solid fa-play"></i> Start</button>
+    <button class="btn btn-success" onclick="ctrl('start')">
+      <i class="fa-solid fa-play"></i> {% if campaign.status == 'paused' %}Resume{% else %}Start{% endif %}
+    </button>
     {% endif %}
     {% if campaign.status == 'active' %}
     <button class="btn btn-secondary" onclick="ctrl('pause')"><i class="fa-solid fa-pause"></i> Pause</button>
@@ -22,10 +24,13 @@
     <button class="btn btn-danger" onclick="ctrl('stop')"><i class="fa-solid fa-stop"></i> Stop</button>
     {% endif %}
     <a href="{% url 'campaigns:agents' campaign.pk %}" class="btn btn-secondary">
-      <i class="fa-solid fa-users"></i> Agents
+      <i class="fa-solid fa-users"></i> Manage Agents
     </a>
     <button class="btn btn-secondary" onclick="refillHopper()">
       <i class="fa-solid fa-rotate"></i> Refill
+    </button>
+    <button class="btn btn-secondary" onclick="resetStaleDialing()">
+      <i class="fa-solid fa-broom"></i> Reset Stale
     </button>
     <a href="{% url 'campaigns:edit' campaign.pk %}" class="btn btn-secondary">
       <i class="fa-solid fa-pen"></i> Settings
@@ -82,6 +87,11 @@
       <div class="card-header">
         <span class="card-title">Assigned Agents</span>
         <span class="badge badge-active">{{ agents|length }}</span>
+      </div>
+      <div style="padding:0 16px 12px">
+        <a href="{% url 'campaigns:agents' campaign.pk %}" class="btn btn-secondary btn-sm">
+          <i class="fa-solid fa-user-plus"></i> Manage Assignments
+        </a>
       </div>
       {% if agents %}
       <div class="table-wrap">
@@ -196,20 +206,23 @@
 </div>
 
 <script>
-const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+const csrfToken = '{{ csrf_token|escapejs }}';
 
 async function ctrl(action) {
   if (action === 'stop' && !confirm('Stop this campaign?')) return;
   const res  = await fetch('{% url "campaigns:control" campaign.pk %}', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
-    body:    `action=${action}`,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrfToken },
+    credentials: 'same-origin',
+    body:    new URLSearchParams({ action }).toString(),
   });
   const data = await res.json();
   if (data.success) {
     DF.toast(`Campaign ${data.display}`, 'success');
     setTimeout(() => location.reload(), 800);
+    return;
   }
+  DF.toast(data.error || 'Campaign action failed', 'error');
 }
 
 // Live campaign stats via supervisor WS
@@ -226,13 +239,35 @@ const ws = new ReconnectingWS('/ws/supervisor/', {
 
 async function refillHopper() {
   const res  = await fetch('{% url "campaigns:hopper_refill" campaign.pk %}', {
-    method: 'POST', headers: { 'X-CSRFToken': csrf }
+    method: 'POST',
+    headers: { 'X-CSRFToken': csrfToken },
+    credentials: 'same-origin',
   });
   const data = await res.json();
   if (data.success) {
     DF.toast(data.message, 'success');
     document.getElementById('hopperQueued').textContent = parseInt(document.getElementById('hopperQueued').textContent) + data.added;
+    return;
   }
+  DF.toast(data.error || 'Hopper refill failed', 'error');
+}
+
+async function resetStaleDialing() {
+  const res  = await fetch('{% url "campaigns:hopper_reset_stale" campaign.pk %}', {
+    method: 'POST',
+    headers: { 'X-CSRFToken': csrfToken },
+    credentials: 'same-origin',
+  });
+  const data = await res.json();
+  if (data.success) {
+    DF.toast(data.message, data.reset > 0 ? 'success' : 'info');
+    if (data.hopper) {
+      document.getElementById('hopperQueued').textContent = data.hopper.queued;
+      document.getElementById('hopperFlight').textContent = data.hopper.in_flight;
+    }
+    return;
+  }
+  DF.toast(data.error || 'Reset stale dialing failed', 'error');
 }
 
 // Refresh hopper stats every 15s

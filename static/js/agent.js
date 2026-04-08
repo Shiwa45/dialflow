@@ -48,6 +48,7 @@ window.Agent = (() => {
       wrapup_timeout_warning: onWrapupWarning,
       wrapup_expired:         onWrapupExpired,
       dispose_ok:             onDisposeOk,
+      error:                  d => DF.toast(d.message || 'Action failed', 'error'),
       force_logout:           () => { window.location = '/auth/logout/'; },
     };
     handlers[data.type]?.(data);
@@ -76,11 +77,13 @@ window.Agent = (() => {
     const camp = data.campaigns?.find(c => c.id == data.active_campaign_id);
     if (camp?.auto_wrapup_enabled) wrapupTimeout = camp.auto_wrapup_timeout;
 
-    // Restore pending wrapup
-    if (data.status === 'wrapup' && data.pending_call) {
-      callId = String(data.pending_call.id);
-      enterWrapup(data.pending_call);
-      if (data.wrapup_seconds_remaining > 0) startWrapupCountdown(data.wrapup_seconds_remaining);
+    // Restore pending wrapup after refresh/reconnect.
+    if (data.status === 'wrapup') {
+      callId = String(data.pending_call_log_id || data.pending_call?.id || callId || '');
+      if (callId) {
+        enterWrapup(data.pending_call || null);
+        if (data.wrapup_seconds_remaining > 0) startWrapupCountdown(data.wrapup_seconds_remaining);
+      }
     }
 
     enableChips(true);
@@ -122,7 +125,7 @@ window.Agent = (() => {
 
   function onCallEnded(data) {
     stopCallTimer();
-    callId = data.call_id || callId;
+    callId = String(data.call_log_id || data.call_id || callId || '');
     if (data.needs_disposition) {
       enterWrapup(null);
     } else {
@@ -255,12 +258,17 @@ window.Agent = (() => {
 
   function submitDisposition() {
     if (!selectedDispId || !callId) return;
+    const parsedCallLogId = parseInt(callId, 10);
+    if (!Number.isFinite(parsedCallLogId) || parsedCallLogId <= 0) {
+      DF.toast('Missing call log id for disposition', 'error');
+      return;
+    }
     const bd = $('btnDispose');
     if (bd) bd.disabled = true;
     ws.send({
       action:         'dispose',
-      disposition_id: parseInt(selectedDispId),
-      call_log_id:    parseInt(callId),
+      disposition_id: parseInt(selectedDispId, 10),
+      call_log_id:    parsedCallLogId,
       notes:          $('dispNotes')?.value?.trim() || '',
       callback_at:    $('callbackAt')?.value || null,
     });

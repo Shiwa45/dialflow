@@ -36,8 +36,11 @@ env/
 *.pid
 
 # Celery
-celerybeat-schedule
+celerybeat-schedule*
 celerybeat.pid
+
+# Antigravity artifacts
+.codex
 
 # Test
 .coverage

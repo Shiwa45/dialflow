@@ -59,10 +59,18 @@ app.conf.beat_schedule = {
         'schedule': crontab(hour=0, minute=0),
     },
 
-    # ── Daily report snapshot at midnight ────────────────────────────────────
-    'daily-report-snapshot': {
-        'task': 'reports.tasks.generate_daily_snapshot',
+    # ── Daily report snapshots at midnight ────────────────────────────────────
+    'daily-report-snapshots': {
+        'task': 'reports.tasks.generate_daily_snapshots',
         'schedule': crontab(hour=0, minute=5),
+    },
+    'daily-agent-logs': {
+        'task': 'reports.tasks.generate_agent_daily_logs',
+        'schedule': crontab(hour=0, minute=10),
+    },
+    'close-stale-logins': {
+        'task': 'reports.tasks.close_stale_login_sessions',
+        'schedule': 300.0,
     },
 }
 

@@ -120,6 +120,7 @@ CELERY_RESULT_SERIALIZER  = 'json'
 CELERY_TIMEZONE           = config('TIME_ZONE', default='Asia/Kolkata')
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT    = 300
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # Important for call tasks — prevents starvation
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -174,7 +175,7 @@ ASTERISK = {
     'ARI_HOST':     config('ARI_HOST',     default='127.0.0.1'),
     'ARI_PORT':     config('ARI_PORT',     default=8088, cast=int),
     'ARI_USERNAME': config('ARI_USERNAME', default='asterisk'),
-    'ARI_PASSWORD': config('ARI_PASSWORD', default='asterisk'),
+    'ARI_PASSWORD': config('ARI_PASSWORD', default='asterisk_ari_password'),
     'ARI_APP_NAME': config('ARI_APP_NAME', default='dialflow'),
     'AMI_HOST':     config('AMI_HOST',     default='127.0.0.1'),
     'AMI_PORT':     config('AMI_PORT',     default=5038, cast=int),
@@ -238,17 +239,26 @@ LOGGING = {
             'backupCount': 3,
             'formatter': 'verbose',
         },
+        'dialer_file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': BASE_DIR / 'logs' / 'dialer.log',
+            'maxBytes': 10 * 1024 * 1024,
+            'backupCount': 5,
+            'formatter': 'verbose',
+        },
     },
     'root': {
         'handlers': ['console'],
         'level': 'INFO',
     },
     'loggers': {
-        'dialflow': {'handlers': ['console', 'file'], 'level': 'DEBUG', 'propagate': False},
-        'telephony.ari_worker': {'handlers': ['console', 'ari_file'], 'level': 'DEBUG', 'propagate': False},
-        'django': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
-        'channels': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
-        'celery': {'handlers': ['console', 'file'], 'level': 'INFO', 'propagate': False},
+        'dialflow': {'handlers': ['console', 'file'], 'level': 'INFO', 'propagate': False},
+        'dialflow.dialer': {'handlers': ['console', 'dialer_file'], 'level': 'INFO', 'propagate': False},
+        'dialflow.predictive': {'handlers': ['console', 'dialer_file'], 'level': 'INFO', 'propagate': False},
+        'telephony.ari_worker': {'handlers': ['console', 'ari_file'], 'level': 'INFO', 'propagate': False},
+        'django': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
+        'channels': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
+        'celery': {'handlers': ['console', 'file'], 'level': 'ERROR', 'propagate': False},
     },
 }
 

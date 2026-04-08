@@ -47,7 +47,7 @@ class AsteriskServerFactory(DjangoModelFactory):
     ari_host     = '127.0.0.1'
     ari_port     = 8088
     ari_username = 'asterisk'
-    ari_password = 'asterisk'
+    ari_password = 'asterisk_ari_password'
     ari_app_name = 'dialflow'
     ami_host     = '127.0.0.1'
     ami_port     = 5038

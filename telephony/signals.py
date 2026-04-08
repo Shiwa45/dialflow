@@ -1,6 +1,6 @@
 # telephony/signals.py
 import logging
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import pre_save, post_save, post_delete
 from django.dispatch import receiver
 from .models import Phone, Carrier
 
@@ -50,10 +50,13 @@ def sync_carrier_to_asterisk(sender, instance, **kwargs):
     """
     if instance.is_active:
         try:
-            instance.sync_to_asterisk()
+            instance.sync_to_asterisk(
+                previous_endpoint_id=getattr(instance, '_previous_endpoint_id', None)
+            )
             logger.info(f'Carrier {instance.name} ({instance.endpoint_id}) synced to Asterisk.')
         except Exception as e:
             logger.error(f'Failed to sync carrier {instance.name} to Asterisk: {e}')
+            raise
     else:
         try:
             instance.remove_from_asterisk()
@@ -71,3 +74,19 @@ def remove_carrier_from_asterisk(sender, instance, **kwargs):
     except Exception as e:
         logger.error(f'Failed to remove carrier {instance.name} on delete: {e}')
 
+
+@receiver(pre_save, sender=Carrier)
+def capture_previous_carrier_endpoint_id(sender, instance, **kwargs):
+    """
+    Track prior endpoint id so post_save can remove stale trunk rows when
+    carrier name changes (endpoint_id is derived from name).
+    """
+    if not instance.pk:
+        instance._previous_endpoint_id = None
+        return
+
+    try:
+        prev = Carrier.objects.get(pk=instance.pk)
+        instance._previous_endpoint_id = prev.endpoint_id
+    except Carrier.DoesNotExist:
+        instance._previous_endpoint_id = None

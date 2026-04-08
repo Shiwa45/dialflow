@@ -39,7 +39,7 @@ class SupervisorConsumer(AsyncWebsocketConsumer):
             data    = json.loads(text_data or '{}')
             action  = data.get('action')
             if action == 'ping':
-                await self.send(text_data=json.dumps({'type': 'pong'}))
+                await self.send(text_data=json.dumps({'type': 'pong'}, default=str))
         except Exception as e:
             logger.warning(f'SupervisorConsumer.receive error: {e}')
 
@@ -47,7 +47,7 @@ class SupervisorConsumer(AsyncWebsocketConsumer):
 
     async def supervisor_message(self, event):
         """Forward any supervisor-group broadcast to this socket."""
-        await self.send(text_data=json.dumps(event['payload']))
+        await self.send(text_data=json.dumps(event['payload'], default=str))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ class SupervisorConsumer(AsyncWebsocketConsumer):
         """Push current state of all campaigns + agents on connect."""
         from asgiref.sync import sync_to_async
         snapshot = await sync_to_async(self._build_snapshot)()
-        await self.send(text_data=json.dumps({'type': 'snapshot', **snapshot}))
+        await self.send(text_data=json.dumps({'type': 'snapshot', **snapshot}, default=str))
 
     def _build_snapshot(self):
         from campaigns.models import Campaign
@@ -98,4 +98,4 @@ class CampaignConsumer(AsyncWebsocketConsumer):
         )
 
     async def campaign_message(self, event):
-        await self.send(text_data=json.dumps(event['payload']))
+        await self.send(text_data=json.dumps(event['payload'], default=str))

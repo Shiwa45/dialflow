@@ -33,12 +33,11 @@ cp .env.example .env
 createdb dialflow_db
 python manage.py migrate
 
-# 4. Create admin user
+# 4. Create admin userl
 python manage.py createsuperuser
 
 # 5. Seed initial data (dispositions, sample campaign, phone extension)
-python manage.py setup_initial_data
-
+l
 # 6. Start services (3 terminals)
 python manage.py runserver        # ARI worker auto-starts here
 celery -A dialflow worker -l info

@@ -3,9 +3,12 @@
 {% block nav_leads %}active{% endblock %}
 
 {% block topbar_right %}
-<button class="btn btn-secondary btn-sm" onclick="openImportModal()">
+<a href="{% url 'leads:import_page' %}" class="btn btn-secondary btn-sm">
   <i class="fa-solid fa-upload"></i> Import CSV
-</button>
+</a>
+<a href="{% url 'leads:batch_list' %}" class="btn btn-secondary btn-sm">
+  <i class="fa-solid fa-layer-group"></i> Batches
+</a>
 <a href="{% url 'leads:export' %}" class="btn btn-secondary btn-sm">
   <i class="fa-solid fa-download"></i> Export
 </a>
@@ -26,10 +29,26 @@
       <input class="form-input" name="q" value="{{ search }}"
              placeholder="Search name, phone, email…" style="flex:1;max-width:360px"
              autofocus>
+      <select class="form-input" name="batch" style="max-width:220px">
+        <option value="">All batches</option>
+        {% for b in batches %}
+        <option value="{{ b.id }}" {% if batch_id == b.id|stringformat:"s" %}selected{% endif %}>
+          {{ b.name }} ({{ b.lead_count }})
+        </option>
+        {% endfor %}
+      </select>
+      <select class="form-input" name="campaign" style="max-width:220px">
+        <option value="">All campaigns</option>
+        {% for c in campaigns %}
+        <option value="{{ c.id }}" {% if campaign_id == c.id|stringformat:"s" %}selected{% endif %}>
+          {{ c.name }}
+        </option>
+        {% endfor %}
+      </select>
       <button type="submit" class="btn btn-secondary">
         <i class="fa-solid fa-magnifying-glass"></i> Search
       </button>
-      {% if search %}<a href="{% url 'leads:list' %}" class="btn btn-ghost">Clear</a>{% endif %}
+      {% if search or batch_id or campaign_id %}<a href="{% url 'leads:list' %}" class="btn btn-ghost">Clear</a>{% endif %}
     </form>
   </div>
 </div>
@@ -45,7 +64,9 @@
           <th>City</th>
           <th>Priority</th>
           <th>Status</th>
+          <th>Batch</th>
           <th>Campaigns</th>
+          <th>DNC</th>
           <th></th>
         </tr>
       </thead>
@@ -79,8 +100,19 @@
             {% endif %}
           </td>
           <td class="text-sm text-muted">
+            {% for b in lead.batches.all|slice:":2" %}{{ b.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
+            {% if lead.batches.count > 2 %}+{{ lead.batches.count|add:"-2" }} more{% endif %}
+          </td>
+          <td class="text-sm text-muted">
             {% for c in lead.campaigns.all|slice:":2" %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
             {% if lead.campaigns.count > 2 %}+{{ lead.campaigns.count|add:"-2" }} more{% endif %}
+          </td>
+          <td>
+            <button class="btn btn-ghost btn-sm btn-icon {% if lead.do_not_call %}text-danger{% endif %}"
+                    onclick="toggleDNC({{ lead.pk }}, {{ lead.do_not_call|yesno:'true,false' }}, this)"
+                    title="{% if lead.do_not_call %}Remove from DNC{% else %}Add to DNC{% endif %}">
+              <i class="fa-solid {% if lead.do_not_call %}fa-ban{% else %}fa-shield-halved{% endif %}"></i>
+            </button>
           </td>
           <td>
             <a href="{% url 'leads:detail' lead.pk %}" class="btn btn-ghost btn-sm btn-icon" title="View">
@@ -90,13 +122,13 @@
         </tr>
         {% empty %}
         <tr>
-          <td colspan="8" style="text-align:center;padding:48px;color:var(--color-text-3)">
+          <td colspan="10" style="text-align:center;padding:48px;color:var(--color-text-3)">
             {% if search %}
               No leads match "<strong>{{ search }}</strong>"
             {% else %}
-              No leads yet. <button class="btn btn-primary btn-sm" onclick="openImportModal()">
+              No leads yet. <a href="{% url 'leads:import_page' %}" class="btn btn-primary btn-sm">
                 Import CSV
-              </button>
+              </a>
             {% endif %}
           </td>
         </tr>
@@ -125,95 +157,30 @@
   {% endif %}
 </div>
 
-<!-- Import Modal -->
-<div class="disposition-overlay" id="importModal">
-  <div class="disposition-modal" style="width:440px">
-    <div class="disposition-title">Import Leads from CSV</div>
-    <div class="disposition-subtitle">
-      First row must be headers. Required column: <code>primary_phone</code> (or <code>phone</code>).
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Campaign (optional)</label>
-      <select class="form-input" id="importCampaign">
-        <option value="">— no campaign —</option>
-        {% for c in campaigns %}
-        <option value="{{ c.id }}">{{ c.name }}</option>
-        {% endfor %}
-      </select>
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">CSV File</label>
-      <input type="file" id="importFile" class="form-input" accept=".csv,.txt">
-    </div>
-
-    <div id="importProgress" style="display:none" class="text-sm text-muted mt-2">
-      <i class="fa-solid fa-spinner fa-spin"></i> Importing…
-    </div>
-    <div id="importResult" style="display:none" class="mt-2"></div>
-
-    <div style="display:flex;gap:10px;margin-top:16px">
-      <button class="btn btn-primary" onclick="runImport()">
-        <i class="fa-solid fa-upload"></i> Import
-      </button>
-      <button class="btn btn-secondary" onclick="closeImportModal()">Cancel</button>
-    </div>
-
-    <div class="mt-4" style="font-size:12px;color:var(--color-text-3)">
-      <strong>Accepted columns:</strong> first_name, last_name, primary_phone, email,
-      company, city, state, country, timezone, source, priority, alt_phone_1, alt_phone_2
-    </div>
-  </div>
-</div>
-
 <script>
-function openImportModal()  { document.getElementById('importModal').classList.add('visible'); }
-function closeImportModal() { document.getElementById('importModal').classList.remove('visible'); }
+const csrfToken = '{{ csrf_token|escapejs }}';
 
-async function runImport() {
-  const file    = document.getElementById('importFile').files[0];
-  const campId  = document.getElementById('importCampaign').value;
-  if (!file) { DF.toast('Please select a CSV file', 'warning'); return; }
+function toggleDNC(leadId, isDnc, btn) {
+  const action = isDnc ? 'remove from' : 'add to';
+  if (!confirm(`Are you sure you want to ${action} DNC?`)) return;
 
-  document.getElementById('importProgress').style.display = '';
-  document.getElementById('importResult').style.display   = 'none';
+  const fd = new FormData();
+  fd.append('csrfmiddlewaretoken', csrfToken);
 
-  const form  = new FormData();
-  form.append('file', file);
-  if (campId) form.append('campaign_id', campId);
-
-  const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
-  try {
-    const res  = await fetch('{% url "leads:import" %}', {
-      method: 'POST',
-      headers: { 'X-CSRFToken': csrf },
-      body: form,
+  fetch(`/leads/api/${leadId}/toggle-dnc/`, {
+    method: 'POST',
+    headers: { 'X-CSRFToken': csrfToken },
+    credentials: 'same-origin',
+    body: fd
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        location.reload();
+      } else {
+        alert(data.error || 'Error toggling DNC');
+      }
     });
-    const data = await res.json();
-    document.getElementById('importProgress').style.display = 'none';
-    const el = document.getElementById('importResult');
-    el.style.display = '';
-    if (data.success) {
-      el.innerHTML = `<div class="toast toast-success">
-        <i class="fa-solid fa-circle-check"></i>
-        Imported <strong>${data.created}</strong> leads, skipped ${data.skipped}.
-      </div>`;
-      setTimeout(() => location.reload(), 1500);
-    } else {
-      el.innerHTML = `<div class="toast toast-error">
-        <i class="fa-solid fa-circle-xmark"></i> ${data.error}
-      </div>`;
-    }
-  } catch(e) {
-    document.getElementById('importProgress').style.display = 'none';
-    DF.toast('Import failed: ' + e.message, 'error');
-  }
 }
-
-// Close modal on backdrop click
-document.getElementById('importModal').addEventListener('click', function(e) {
-  if (e.target === this) closeImportModal();
-});
 </script>
 {% endblock %}

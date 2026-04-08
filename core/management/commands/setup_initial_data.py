@@ -94,7 +94,7 @@ class Command(BaseCommand):
                 'ari_host':     cfg.get('ARI_HOST', '127.0.0.1'),
                 'ari_port':     cfg.get('ARI_PORT', 8088),
                 'ari_username': cfg.get('ARI_USERNAME', 'asterisk'),
-                'ari_password': cfg.get('ARI_PASSWORD', 'asterisk'),
+                'ari_password': cfg.get('ARI_PASSWORD', 'asterisk_ari_password'),
                 'ari_app_name': cfg.get('ARI_APP_NAME', 'dialflow'),
                 'ami_host':     cfg.get('AMI_HOST', '127.0.0.1'),
                 'ami_port':     cfg.get('AMI_PORT', 5038),

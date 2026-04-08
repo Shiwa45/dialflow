@@ -5,13 +5,16 @@ from . import views
 app_name = 'leads'
 
 urlpatterns = [
-    path('',                   views.lead_list,      name='list'),
-    path('detail/<int:pk>/',   views.lead_detail,    name='detail'),
-    path('import/',            views.import_page,    name='import_page'),
-    path('import/upload/',     views.import_mapped,  name='import_mapped'),
-    path('import/legacy/',     views.lead_import,    name='import'),
-    path('export/',            views.lead_export,    name='export'),
-    path('recycle/',           views.recycle_page,   name='recycle'),
-    path('recycle/submit/',    views.recycle_leads,  name='recycle'),
-    path('api/add-note/',      views.lead_add_note,  name='add_note'),
+    path('',                         views.lead_list,      name='list'),
+    path('batches/',                 views.batch_list,     name='batch_list'),
+    path('batches/<int:pk>/assign/', views.batch_assign_campaign, name='batch_assign_campaign'),
+    path('detail/<int:pk>/',         views.lead_detail,    name='detail'),
+    path('import/',                  views.import_page,    name='import_page'),
+    path('import/upload/',           views.import_mapped,  name='import_mapped'),
+    path('import/legacy/',           views.lead_import,    name='import'),
+    path('export/',                  views.lead_export,    name='export'),
+    path('recycle/',                 views.recycle_page,   name='recycle'),
+    path('recycle/submit/',          views.recycle_leads,  name='recycle'),
+    path('api/<int:pk>/add-note/',   views.lead_add_note,  name='add_note'),
+    path('api/<int:pk>/toggle-dnc/', views.toggle_dnc,     name='toggle_dnc'),
 ]

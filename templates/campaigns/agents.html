@@ -108,7 +108,7 @@
 </div>
 
 <script>
-const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+const csrfToken = '{{ csrf_token|escapejs }}';
 
 function filterAvailable() {
   const q = document.getElementById('agentSearch').value.toLowerCase();
@@ -121,8 +121,9 @@ async function assign(agentId, btn) {
   btn.disabled = true;
   const res  = await fetch('{% url "campaigns:agent_assign" campaign.pk %}', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
-    body: `agent_id=${agentId}`,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrfToken },
+    credentials: 'same-origin',
+    body: new URLSearchParams({ agent_id: agentId }).toString(),
   });
   const data = await res.json();
   if (data.success) {
@@ -141,15 +142,18 @@ async function unassign(agentId, name) {
   if (!confirm(`Remove ${name} from this campaign?`)) return;
   const res  = await fetch('{% url "campaigns:agent_unassign" campaign.pk %}', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
-    body: `agent_id=${agentId}`,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrfToken },
+    credentials: 'same-origin',
+    body: new URLSearchParams({ agent_id: agentId }).toString(),
   });
   const data = await res.json();
   if (data.success) {
     const row = document.getElementById(`row-${agentId}`);
     if (row) row.remove();
     DF.toast(`${name} removed`, 'info');
+    return;
   }
+  DF.toast(data.error || 'Failed to remove agent', 'error');
 }
 </script>
 {% endblock %}

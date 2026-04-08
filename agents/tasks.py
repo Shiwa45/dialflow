@@ -88,7 +88,6 @@ def check_wrapup_timeouts():
                         'lead':         call_log.lead,
                         'disposition':  default_disp,
                         'notes':        'Auto-wrapup timeout applied by system',
-                        'auto_applied': True,
                     }
                 )
                 call_log.disposition = default_disp

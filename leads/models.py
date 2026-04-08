@@ -4,6 +4,30 @@ from django.conf import settings
 from core.models import TimestampedModel
 
 
+class LeadBatch(TimestampedModel):
+    """A reusable imported lead list that can later be assigned to campaigns."""
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    source_file = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='lead_batches_created',
+    )
+
+    class Meta:
+        verbose_name = 'Lead Batch'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['name']),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class Lead(TimestampedModel):
     """
     A contact/prospect to be dialed.
@@ -31,6 +55,9 @@ class Lead(TimestampedModel):
     # Campaign membership
     campaigns = models.ManyToManyField(
         'campaigns.Campaign', blank=True, related_name='leads',
+    )
+    batches = models.ManyToManyField(
+        LeadBatch, blank=True, related_name='leads',
     )
 
     # Status

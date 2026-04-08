@@ -39,9 +39,9 @@
         <i class="fa-solid fa-file-csv" style="font-size:2.5rem;color:var(--accent);display:block;margin-bottom:12px"></i>
         <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px">Drop CSV file here or click to browse</div>
         <div class="text-sm text-muted">Supports any CSV format — we'll help you map the columns</div>
-        <div style="font-size:11.5px;color:var(--text-muted);margin-top:8px">Max 50,000 rows · UTF-8 or Excel CSV</div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:8px">Max 50,000 rows · UTF-8 CSV or TXT</div>
       </div>
-      <input type="file" id="fileInput" accept=".csv,.txt,.xlsx" style="display:none" onchange="onFileSelect(this)">
+      <input type="file" id="fileInput" accept=".csv,.txt" style="display:none" onchange="onFileSelect(this)">
 
       <!-- File info (hidden until selected) -->
       <div id="fileInfo" style="display:none;background:var(--bg-sec);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px">
@@ -60,6 +60,10 @@
       <!-- Options -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
         <div class="form-group">
+          <label class="form-label">Batch / List Name</label>
+          <input class="form-input" id="batchName" placeholder="Example: April Mortgage Leads">
+        </div>
+        <div class="form-group">
           <label class="form-label">Campaign</label>
           <select class="form-input" id="campaignSelect">
             <option value="">No campaign (import to pool)</option>
@@ -67,6 +71,12 @@
             <option value="{{ c.id }}">{{ c.name }}</option>
             {% endfor %}
           </select>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+        <div class="form-group">
+          <label class="form-label">Batch Notes</label>
+          <input class="form-input" id="batchDescription" placeholder="Optional description for this list">
         </div>
         <div class="form-group">
           <label class="form-label">Duplicate handling</label>
@@ -105,6 +115,7 @@
         <div class="card-body">
           <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:16px">
             Map each CSV column to a DialFlow field. <span style="color:var(--accent);font-weight:600">Phone number is required.</span>
+            Choose <strong>Custom Field</strong> to preserve extra columns on the lead record.
           </div>
           <div id="mappingRows">
             <!-- Rows injected by JS -->
@@ -199,11 +210,13 @@ const DIALFLOW_FIELDS = [
   {value:'source',      label:'Lead Source'},
   {value:'priority',    label:'Priority (1-10)'},
   {value:'external_id', label:'External ID'},
+  {value:'custom',      label:'Custom Field'},
 ];
 
 const PHONE_ALIASES = ['phone','mobile','cell','number','telephone','tel','contact','phone_number','mobile_number','primary_phone','phonenumber'];
 const NAME_ALIASES  = {first_name:['first','firstname','fname','name','first_name'],last_name:['last','lastname','lname','surname','last_name']};
 const EMAIL_ALIASES = ['email','mail','email_address'];
+const csrfToken = '{{ csrf_token|escapejs }}';
 
 let parsedData = [];   // [{header:[], rows:[[...]]}]
 let csvHeaders  = [];
@@ -223,13 +236,17 @@ function onFileSelect(input) {
 }
 
 function processFile(file) {
-  if (!file.name.match(/\.(csv|txt)$/i) && !file.name.match(/\.xlsx$/i)) {
+  if (!file.name.match(/\.(csv|txt)$/i)) {
     DF.toast('Please upload a CSV or text file', 'error'); return;
   }
   document.getElementById('fileName').textContent = file.name;
   document.getElementById('fileSize').textContent = (file.size / 1024).toFixed(1) + ' KB';
   document.getElementById('fileInfo').style.display = 'block';
   document.getElementById('previewBtn').disabled   = false;
+  const suggestedBatchName = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+  if (!document.getElementById('batchName').value && suggestedBatchName) {
+    document.getElementById('batchName').value = suggestedBatchName;
+  }
 
   const reader = new FileReader();
   reader.onload = e => {
@@ -281,7 +298,7 @@ function previewFile() {
   buildMappingUI();
   buildPreviewTable();
   document.getElementById('totalRows').textContent = parsedData.total || 0;
-  document.getElementById('validRows').textContent = parsedData.total || 0;
+  updateEstimatedStats();
   document.getElementById('step1').style.display = 'none';
   document.getElementById('step2').style.display = '';
   activateStep(2);
@@ -334,6 +351,44 @@ function autoMap() {
 function onMappingChange(sel) {
   mappings[sel.dataset.col] = sel.value;
   sel.classList.toggle('required-field', sel.value === 'primary_phone');
+  updateEstimatedStats();
+}
+
+function updateEstimatedStats() {
+  const total = parsedData.total || 0;
+  const phoneColumn = Object.entries(mappings).find(([, field]) => field === 'primary_phone')?.[0];
+  if (!phoneColumn) {
+    document.getElementById('validRows').textContent = '0';
+    document.getElementById('dupRows').textContent = '0';
+    return;
+  }
+
+  const phoneIndex = csvHeaders.indexOf(phoneColumn);
+  if (phoneIndex === -1) {
+    document.getElementById('validRows').textContent = '0';
+    document.getElementById('dupRows').textContent = '0';
+    return;
+  }
+
+  let valid = 0;
+  let duplicates = 0;
+  const seenPhones = new Set();
+
+  parsedData.rows.forEach(row => {
+    const rawPhone = (row[phoneIndex] || '').trim();
+    const normalizedPhone = rawPhone.replace(/[^\d+]/g, '');
+    if (!normalizedPhone || !/\d/.test(normalizedPhone)) return;
+    valid += 1;
+    if (seenPhones.has(normalizedPhone)) {
+      duplicates += 1;
+    } else {
+      seenPhones.add(normalizedPhone);
+    }
+  });
+
+  document.getElementById('validRows').textContent = String(valid);
+  document.getElementById('dupRows').textContent = String(duplicates);
+  document.getElementById('totalRows').textContent = String(total);
 }
 
 function buildPreviewTable() {
@@ -370,6 +425,8 @@ async function startImport() {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('mappings', JSON.stringify(mappings));
+  formData.append('batch_name', document.getElementById('batchName').value);
+  formData.append('batch_description', document.getElementById('batchDescription').value);
   formData.append('campaign_id', document.getElementById('campaignSelect').value);
   formData.append('duplicate_handling', document.getElementById('duplicateHandling').value);
   formData.append('has_header', document.getElementById('hasHeader').checked ? '1' : '0');
@@ -377,7 +434,8 @@ async function startImport() {
   try {
     const res  = await fetch('{% url "leads:import_mapped" %}', {
       method: 'POST',
-      headers: { 'X-CSRFToken': '{{ csrf_token }}' },
+      headers: { 'X-CSRFToken': csrfToken },
+      credentials: 'same-origin',
       body: formData,
     });
     const data = await res.json();
@@ -387,7 +445,9 @@ async function startImport() {
       document.getElementById('importSummary').innerHTML =
         `<strong style="color:var(--success)">${data.created}</strong> leads created &nbsp;·&nbsp; ` +
         `<strong style="color:var(--text-muted)">${data.skipped}</strong> skipped &nbsp;·&nbsp; ` +
-        `<strong style="color:var(--danger)">${data.errors}</strong> errors`;
+        `<strong style="color:var(--danger)">${data.errors}</strong> errors` +
+        (data.batch_name ? ` &nbsp;·&nbsp; Batch: <strong>${data.batch_name}</strong>` : '') +
+        (data.attached ? ` &nbsp;·&nbsp; <strong>${data.attached}</strong> existing leads attached to batch` : '');
     } else {
       document.getElementById('importSummary').innerHTML =
         `<span style="color:var(--danger)">${data.error || 'Import failed'}</span>`;

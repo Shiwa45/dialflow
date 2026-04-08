@@ -1,0 +1,65 @@
+{% extends "base/base.html" %}
+{% block title %}Disposition Report — DialFlow Pro{% endblock %}
+{% block nav_report_dispositions %}active{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Disposition Report</div>
+    <div class="page-subtitle">{{ total_dispositions }} total dispositions</div>
+  </div>
+  <a href="?date_from={{ date_from }}&date_to={{ date_to }}{% if campaign_id %}&campaign_id={{ campaign_id }}{% endif %}&download=csv" class="btn btn-secondary">
+    <i class="fa-solid fa-download"></i> Download CSV
+  </a>
+</div>
+<div class="card mb-4">
+  <div class="card-body" style="padding:12px">
+    <form method="get" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input class="form-input" name="date_from" type="date" value="{{ date_from }}" style="width:155px">
+      <input class="form-input" name="date_to" type="date" value="{{ date_to }}" style="width:155px">
+      <select class="form-input" name="campaign_id" style="width:200px">
+        <option value="">All Campaigns</option>
+        {% for c in campaigns %}<option value="{{ c.id }}"{% if campaign_id == c.id|stringformat:"d" %} selected{% endif %}>{{ c.name }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="btn btn-primary">Apply</button>
+    </form>
+  </div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <div class="card">
+    <div class="card-header"><span class="card-title">By Disposition</span></div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Disposition</th><th>Category</th><th>Count</th></tr></thead>
+        <tbody>
+          {% for r in summary %}
+          <tr>
+            <td><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:{{ r.disposition__color }}"></span>{{ r.disposition__name }}</span></td>
+            <td><span class="badge">{{ r.disposition__category }}</span></td>
+            <td class="text-mono">{{ r.count }}</td>
+          </tr>
+          {% empty %}<tr><td colspan="3" style="text-align:center;padding:30px;color:var(--color-text-3)">No data</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">By Agent</span></div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Agent</th><th>Total</th><th>Sales</th><th>Callbacks</th><th>DNC</th></tr></thead>
+        <tbody>
+          {% for r in by_agent %}
+          <tr>
+            <td>{{ r.agent__first_name }} {{ r.agent__last_name }}</td>
+            <td class="text-mono">{{ r.total }}</td>
+            <td class="text-mono" style="color:var(--color-success)">{{ r.sales }}</td>
+            <td class="text-mono" style="color:var(--color-info)">{{ r.callbacks }}</td>
+            <td class="text-mono" style="color:var(--color-danger)">{{ r.dnc }}</td>
+          </tr>
+          {% empty %}<tr><td colspan="5" style="text-align:center;padding:30px;color:var(--color-text-3)">No data</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

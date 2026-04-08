@@ -492,13 +492,14 @@ body { overflow-x: hidden; }
   function handle(d){
     const t=d.type;
     if(t==='snapshot')       applySnapshot(d);
-    else if(t==='status_changed')  applyStatus(d);
+    else if(t==='status_changed'||t==='status_change')  applyStatus(d);
     else if(t==='call_incoming')   onIncoming(d);
     else if(t==='call_connected')  onConnected(d);
     else if(t==='call_ended')      onEnded(d);
     else if(t==='wrapup_timeout_warning') toast('Auto-wrapup in '+d.seconds_remaining+'s','warning');
     else if(t==='wrapup_expired')  {toast('Auto-wrapup: '+d.disposition_applied,'info');closeWrapup();}
     else if(t==='dispose_ok')      {closeWrapup();toast('Disposition saved','success');}
+    else if(t==='error')           {toast(d.message||'Action failed','danger');if(inWrapup&&selDispId){$('btn-save-disp').disabled=false;}}
     else if(t==='force_logout')    {toast(d.reason||'Logged out by supervisor','warning');setTimeout(()=>{location.href='/auth/logout/';},2500);}
   }
 
@@ -506,7 +507,10 @@ body { overflow-x: hidden; }
     applyStatus({status:d.status,display:d.status_display,since:d.status_since});
     if(d.dispositions?.length)renderDispositions(d.dispositions);
     if(d.stats_today)updateStats(d.stats_today);
-    if(d.status==='wrapup'&&d.pending_call){callId=String(d.pending_call.id);enterWrapup(d.pending_call);}
+    if(d.status==='wrapup'){
+      callId=String(d.pending_call_log_id||d.pending_call?.id||callId||'');
+      if(callId)enterWrapup(d.pending_call||null);
+    }
     document.querySelectorAll('[data-set-status]').forEach(b=>b.disabled=false);
     loadHistory();
   }
@@ -527,7 +531,7 @@ body { overflow-x: hidden; }
     if(autoAns&&session)setTimeout(()=>answerSession(),700);
   }
   function onConnected(d){callId=d.call_id;showCall(d.lead||{},'connected');startCallTimer();renderLead(d.lead||{});}
-  function onEnded(d){stopCallTimer();callId=d.call_id||callId;if(d.needs_disposition&&callId)enterWrapup(null);else resetCall();}
+  function onEnded(d){stopCallTimer();callId=String(d.call_log_id||d.call_id||callId||'');if(d.needs_disposition&&callId)enterWrapup(null);else resetCall();}
 
   function showCall(lead,state){
     $('call-placeholder').style.display='none';
@@ -560,7 +564,9 @@ body { overflow-x: hidden; }
 
   function enterWrapup(ci){
     inWrapup=true;selDispId=null;$('btn-save-disp').disabled=true;
+    applyStatus({status:'wrapup',display:'Wrap-up',since:new Date().toISOString()});
     if(ci){const n=ci.lead_name||ci.first_name||'--';$('disp-subtitle').textContent='Call with '+n+' · '+fmt(ci.duration||0);}
+    else {$('disp-subtitle').textContent='Select a disposition to complete this call.';}
     const notesEl=$('call-notes');if(notesEl)$('disp-notes').value=notesEl.value;
     resetCall();
     dispOverlay.classList.add('visible');
@@ -584,8 +590,10 @@ body { overflow-x: hidden; }
 
   $('btn-save-disp').onclick=function(){
     if(!selDispId||!callId)return;
+    const cid=parseInt(callId,10);
+    if(!Number.isFinite(cid)||cid<=0){toast('Missing call log id for disposition','danger');return;}
     this.disabled=true;
-    wsSend({action:'dispose',disposition_id:parseInt(selDispId),call_log_id:parseInt(callId),notes:$('disp-notes').value.trim(),callback_at:$('callback-at').value||null});
+    wsSend({action:'dispose',disposition_id:parseInt(selDispId,10),call_log_id:cid,notes:$('disp-notes').value.trim(),callback_at:$('callback-at').value||null});
   };
 
   document.addEventListener('keydown',e=>{
@@ -655,10 +663,16 @@ body { overflow-x: hidden; }
     if(session){s.terminate({status_code:486});return;}
     session=s;
     s.on('peerconnection',pc=>{pc.peerconnection.addEventListener('track',ev=>{if(ev.streams?.[0])remAudio.srcObject=ev.streams[0];});});
-    s.on('progress',()=>{const dir=s.direction;$('phone-status-disp').textContent=dir==='incoming'?autoAns?'AUTO-ANSWERING...':'INCOMING...':'RINGING...';if(dir==='incoming'&&autoAns)setTimeout(answerSession,700);});
+    s.on('progress',()=>{const dir=s.direction;$('phone-status-disp').textContent=dir==='incoming'?'INCOMING...':'RINGING...';});
     s.on('accepted',()=>{$('phone-status-disp').textContent='CONNECTED';btnCall.disabled=true;btnHang.disabled=false;});
     s.on('ended',()=>{session=null;$('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'ENDED';});
     s.on('failed',()=>{session=null;$('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'FAILED';});
+    
+    // Auto-answer logic for incoming calls
+    if (s.direction === 'incoming') {
+      $('phone-status-disp').textContent = autoAns ? 'AUTO-ANSWERING...' : 'INCOMING...';
+      if (autoAns) setTimeout(answerSession, 700);
+    }
   }
 
   function answerSession(){if(!session)return;session.answer({mediaConstraints:{audio:true,video:false},pcConfig:{iceServers:ICE}});}
@@ -700,7 +714,12 @@ body { overflow-x: hidden; }
   $('auto-answer-toggle').onchange=function(){autoAns=this.checked;toast('Auto-answer '+(autoAns?'ON':'OFF'),'info');};
 
   /* ── Status chips ── */
-  document.querySelectorAll('[data-set-status]').forEach(b=>{b.onclick=function(){if(inWrapup){openDisposition();return;}wsSend({action:'set_status',status:this.dataset.setStatus});};});
+  document.querySelectorAll('[data-set-status]').forEach(b=>{b.onclick=function(){
+    if(inWrapup){openDisposition();return;}
+    const nextStatus=this.dataset.setStatus;
+    applyStatus({status:nextStatus,display:tc(nextStatus),since:new Date().toISOString()});
+    wsSend({action:'set_status',status:nextStatus});
+  };});
 
   const campSel=$('campaign-select');
   if(campSel)campSel.onchange=function(){if(this.value)wsSend({action:'set_campaign',campaign_id:parseInt(this.value)});};

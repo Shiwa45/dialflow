@@ -22,6 +22,7 @@ urlpatterns = [
 
     # Hopper
     path('<int:pk>/hopper/refill/',     views.hopper_refill,      name='hopper_refill'),
+    path('<int:pk>/hopper/reset-stale/', views.hopper_reset_stale, name='hopper_reset_stale'),
 
     # Dispositions
     path('dispositions/',               views.disposition_list,   name='dispositions'),

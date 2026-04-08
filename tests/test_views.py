@@ -5,6 +5,7 @@ Tests authentication, redirects, and key response codes.
 """
 import pytest
 from django.urls import reverse
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 
 @pytest.fixture
@@ -203,22 +204,77 @@ class TestLeadViews:
         res = client.get('/leads/')
         assert res.status_code == 200
 
-    def test_lead_import_no_file(self, client, supervisor):
+    def test_lead_import_page_renders(self, client, supervisor):
         client.login(username='viewsup', password='testpass')
-        res = client.post('/leads/import/')
+        res = client.get('/leads/import/')
+        assert res.status_code == 200
+
+    def test_mapped_lead_import_no_file(self, client, supervisor):
+        client.login(username='viewsup', password='testpass')
+        res = client.post('/leads/import/upload/')
         assert res.status_code == 400
 
-    def test_lead_import_csv(self, client, supervisor):
-        import io
+    def test_mapped_lead_import_csv(self, client, supervisor):
+        from leads.models import Lead, LeadBatch
+
         client.login(username='viewsup', password='testpass')
-        csv_content = 'first_name,last_name,primary_phone\nTest,User,+919876543999\n'
-        csv_file = io.BytesIO(csv_content.encode())
-        csv_file.name = 'test.csv'
-        res = client.post('/leads/import/', {'file': csv_file})
+        csv_content = 'Customer Name,Mobile Number,Mail\nTest User,+919876543999,test@example.com\n'
+        csv_file = SimpleUploadedFile('test.csv', csv_content.encode(), content_type='text/csv')
+        res = client.post('/leads/import/upload/', {
+            'file': csv_file,
+            'mappings': '{"Customer Name":"first_name","Mobile Number":"primary_phone","Mail":"email"}',
+            'batch_name': 'Spring Upload',
+            'has_header': '1',
+            'duplicate_handling': 'skip',
+        })
         assert res.status_code == 200
         data = res.json()
         assert data.get('success') is True
         assert data.get('created', 0) >= 1
+        assert data.get('batch_name') == 'Spring Upload'
+        lead = Lead.objects.get(primary_phone='+919876543999')
+        assert lead.batches.filter(name='Spring Upload').exists()
+        assert LeadBatch.objects.filter(name='Spring Upload').exists()
+
+    def test_mapped_import_saves_custom_field_columns(self, client, supervisor):
+        from leads.models import Lead
+
+        client.login(username='viewsup', password='testpass')
+        csv_content = 'Phone,Favorite Color,CRM Notes\n+919876543998,Blue,VIP lead\n'
+        csv_file = SimpleUploadedFile('custom.csv', csv_content.encode(), content_type='text/csv')
+        res = client.post('/leads/import/upload/', {
+            'file': csv_file,
+            'mappings': '{"Phone":"primary_phone","Favorite Color":"custom","CRM Notes":"custom"}',
+            'has_header': '1',
+            'duplicate_handling': 'skip',
+        })
+
+        assert res.status_code == 200
+        assert res.json()['success'] is True
+
+        lead = Lead.objects.get(primary_phone='+919876543998')
+        assert lead.custom_fields['Favorite Color'] == 'Blue'
+        assert lead.custom_fields['CRM Notes'] == 'VIP lead'
+
+    def test_batch_assign_campaign(self, client, supervisor, asterisk_server):
+        from campaigns.models import Campaign
+        from leads.models import Lead, LeadBatch
+
+        client.login(username='viewsup', password='testpass')
+        lead = Lead.objects.create(first_name='Batch', primary_phone='+919000000001')
+        batch = LeadBatch.objects.create(name='April Batch')
+        batch.leads.add(lead)
+        campaign = Campaign.objects.create(name='Batch Campaign', asterisk_server=asterisk_server)
+
+        res = client.post(f'/leads/batches/{batch.id}/assign/', {
+            'campaign_id': campaign.id,
+            'action': 'add',
+        })
+
+        assert res.status_code == 200
+        assert res.json()['success'] is True
+        lead.refresh_from_db()
+        assert lead.campaigns.filter(id=campaign.id).exists()
 
 
 # ── Call views ────────────────────────────────────────────────────────────────

@@ -13,5 +13,5 @@ def on_disposition_saved(sender, instance, created, **kwargs):
             'agent_id':    instance.agent_id,
             'campaign_id': instance.campaign_id,
             'disposition': instance.disposition.name,
-            'auto':        instance.auto_applied,
+            'auto':        getattr(instance, 'auto_applied', False),
         })

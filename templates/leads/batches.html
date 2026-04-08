@@ -1,0 +1,105 @@
+{% extends "base/base.html" %}
+{% block title %}Lead Batches — DialFlow Pro{% endblock %}
+{% block nav_leads %}active{% endblock %}
+
+{% block topbar_right %}
+<a href="{% url 'leads:import_page' %}" class="btn btn-secondary btn-sm">
+  <i class="fa-solid fa-upload"></i> Import New Batch
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Lead Batches</div>
+    <div class="page-subtitle">Manage imported lead lists and assign them to campaigns in bulk</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Batch</th>
+          <th>Source File</th>
+          <th>Leads</th>
+          <th>Campaigns</th>
+          <th>Created</th>
+          <th>Assign</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for batch in batches %}
+        <tr>
+          <td>
+            <div style="font-weight:600">{{ batch.name }}</div>
+            {% if batch.description %}
+            <div class="text-sm text-muted">{{ batch.description }}</div>
+            {% endif %}
+          </td>
+          <td class="text-sm text-muted">{{ batch.source_file|default:"—" }}</td>
+          <td class="text-mono text-sm">{{ batch.lead_count }}</td>
+          <td class="text-mono text-sm">{{ batch.campaign_count }}</td>
+          <td class="text-sm text-muted">{{ batch.created_at|date:"d M Y H:i" }}</td>
+          <td>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <select class="form-input" id="campaign-{{ batch.id }}" style="min-width:220px">
+                <option value="">Select campaign</option>
+                {% for c in campaigns %}
+                <option value="{{ c.id }}">{{ c.name }}</option>
+                {% endfor %}
+              </select>
+              <button class="btn btn-primary btn-sm" onclick="assignBatch({{ batch.id }}, 'add')">
+                Add
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="assignBatch({{ batch.id }}, 'remove')">
+                Remove
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="6" style="text-align:center;padding:48px;color:var(--color-text-3)">
+            No lead batches yet. <a href="{% url 'leads:import_page' %}" class="btn btn-primary btn-sm">Import a batch</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const csrfToken = '{{ csrf_token|escapejs }}';
+
+async function assignBatch(batchId, action) {
+  const campaignId = document.getElementById(`campaign-${batchId}`).value;
+  if (!campaignId) {
+    DF.toast('Please choose a campaign first', 'warning');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('campaign_id', campaignId);
+  formData.append('action', action);
+  formData.append('csrfmiddlewaretoken', csrfToken);
+
+  const res = await fetch(`/leads/batches/${batchId}/assign/`, {
+    method: 'POST',
+    headers: { 'X-CSRFToken': csrfToken },
+    credentials: 'same-origin',
+    body: formData,
+  });
+  const data = await res.json();
+  if (data.success) {
+    const verb = action === 'remove' ? 'removed from' : 'added to';
+    DF.toast(`${data.count} leads ${verb} campaign`, 'success');
+    setTimeout(() => location.reload(), 700);
+    return;
+  }
+  DF.toast(data.error || 'Batch action failed', 'error');
+}
+</script>
+{% endblock %}

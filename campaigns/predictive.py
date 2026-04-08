@@ -9,6 +9,21 @@ from django.utils import timezone
 logger = logging.getLogger("dialflow.predictive")
 
 
+def build_cid(campaign_id=None, lead_id=None, channel_id=None):
+    """
+    Build a compact correlation token shared across dialer/ARI logs.
+    Example: cid=c1-l42-ch1706652491.12
+    """
+    parts = []
+    if campaign_id not in (None, ""):
+        parts.append(f"c{campaign_id}")
+    if lead_id not in (None, ""):
+        parts.append(f"l{lead_id}")
+    if channel_id not in (None, ""):
+        parts.append(f"ch{channel_id}")
+    return "cid=" + ("-".join(parts) if parts else "unknown")
+
+
 @dataclass
 class DialerMetrics:
     agents_ready:     int   = 0
@@ -131,6 +146,7 @@ def get_calls_to_dial(campaign_id: int) -> int:
         campaign = Campaign.objects.select_related("asterisk_server","carrier").get(
             id=campaign_id, status=Campaign.STATUS_ACTIVE)
     except Campaign.DoesNotExist:
+        logger.debug(f'Dial decision skipped: campaign={campaign_id} not active or missing')
         return 0
 
     try:
@@ -138,33 +154,64 @@ def get_calls_to_dial(campaign_id: int) -> int:
         tz  = pytz.timezone("Asia/Kolkata")
         now = timezone.now().astimezone(tz)
         if not (campaign.call_hour_start <= now.time() <= campaign.call_hour_end):
+            logger.debug(
+                f'Dial decision skipped: campaign={campaign_id} outside call hours '
+                f'now={now.time()} window={campaign.call_hour_start}-{campaign.call_hour_end}'
+            )
             return 0
     except Exception:
         pass
 
     hopper = get_hopper_stats(campaign_id)
-    if hopper["queued"] == 0: return 0
+    if hopper["queued"] == 0:
+        logger.debug(f'Dial decision skipped: campaign={campaign_id} hopper empty')
+        return 0
 
     assigned_ids = list(campaign.agents.filter(is_active=True).values_list("agent_id", flat=True))
-    if not assigned_ids: return 0
+    if not assigned_ids:
+        logger.debug(f'Dial decision skipped: campaign={campaign_id} no assigned agents')
+        return 0
 
     metrics = _collect_metrics(campaign_id, assigned_ids)
-    if metrics.agents_ready == 0: return 0
+    if metrics.agents_ready == 0:
+        logger.debug(
+            f'Dial decision skipped: campaign={campaign_id} no ready agents '
+            f'on_call={metrics.agents_on_call} wrapup={metrics.agents_wrapup} in_flight={metrics.calls_in_flight}'
+        )
+        return 0
 
     if campaign.dial_mode == Campaign.DIAL_MODE_PREVIEW:
+        logger.debug(f'Dial decision skipped: campaign={campaign_id} preview mode')
         return 0
 
     elif campaign.dial_mode == Campaign.DIAL_MODE_PROGRESSIVE:
-        return max(0, min(metrics.agents_ready - metrics.calls_in_flight, hopper["queued"]))
+        to_dial = max(0, min(metrics.agents_ready - metrics.calls_in_flight, hopper["queued"]))
+        logger.info(
+            f'Progressive decision: campaign={campaign_id} ready={metrics.agents_ready} '
+            f'in_flight={metrics.calls_in_flight} queued={hopper["queued"]} to_dial={to_dial}'
+        )
+        return to_dial
 
     elif campaign.dial_mode == Campaign.DIAL_MODE_PREDICTIVE:
         ratio   = calculate_dial_ratio(metrics, campaign)
-        if ratio <= 0: return 0
+        if ratio <= 0:
+            logger.debug(f'Dial decision skipped: campaign={campaign_id} predictive ratio={ratio}')
+            return 0
         target  = math.ceil(ratio * metrics.agents_ready)
         to_dial = max(0, min(target - metrics.calls_in_flight, hopper["queued"]))
-        logger.info(f"Predictive: campaign={campaign_id} ratio={ratio} ready={metrics.agents_ready} flight={metrics.calls_in_flight} -> {to_dial}")
+        # Safety cap: never place more simultaneous dials than currently ready agents.
+        # Prevents over-origination races in low-seat campaigns (e.g., 1 ready agent).
+        to_dial = min(to_dial, metrics.agents_ready)
+        logger.info(
+            f'Predictive decision: campaign={campaign_id} ratio={ratio} ready={metrics.agents_ready} '
+            f'on_call={metrics.agents_on_call} wrapup={metrics.agents_wrapup} '
+            f'flight={metrics.calls_in_flight} queued={hopper["queued"]} target={target} '
+            f'answer_rate={round(metrics.answer_rate, 2)} abandon_rate={round(metrics.abandon_rate, 2)} '
+            f'to_dial={to_dial}'
+        )
         return to_dial
 
+    logger.debug(f'Dial decision skipped: campaign={campaign_id} unsupported mode={campaign.dial_mode}')
     return 0
 
 
@@ -183,16 +230,39 @@ def get_ready_agents_ordered(campaign_id: int) -> List[int]:
     return list(AgentStatus.objects.filter(user_id__in=assigned, status="ready").order_by("status_changed_at").values_list("user_id", flat=True))
 
 
+def resolve_campaign_carrier(campaign):
+    from telephony.models import Carrier
+
+    if campaign.carrier_id:
+        return campaign.carrier
+
+    if campaign.dial_prefix:
+        return (
+            Carrier.objects.filter(
+                asterisk_server=campaign.asterisk_server,
+                is_active=True,
+                dial_prefix=campaign.dial_prefix,
+            )
+            .order_by("id")
+            .first()
+        )
+
+    return None
+
+
 def originate_calls(campaign_id: int, count: int) -> int:
-    from campaigns.hopper import pop_lead, get_redis, hopper_key
+    from campaigns.hopper import pop_lead, get_redis, hopper_key, complete_lead
     from campaigns.models import Campaign
     from calls.models import CallLog
     import requests as req_lib, json
 
-    if count <= 0: return 0
+    if count <= 0:
+        logger.debug(f'Originate skipped: campaign={campaign_id} count={count}')
+        return 0
     try:
         campaign = Campaign.objects.select_related("asterisk_server","carrier").get(id=campaign_id)
     except Campaign.DoesNotExist:
+        logger.debug(f'Originate skipped: campaign={campaign_id} missing')
         return 0
 
     server    = campaign.asterisk_server
@@ -202,14 +272,33 @@ def originate_calls(campaign_id: int, count: int) -> int:
 
     for _ in range(count):
         lead_data = pop_lead(campaign_id)
-        if not lead_data: break
+        if not lead_data:
+            logger.debug(f'Originate stopped: campaign={campaign_id} no lead popped')
+            break
 
         phone   = lead_data["phone"]
         lead_id = lead_data["lead_id"]
-        dial_no = f"{campaign.dial_prefix}{phone}" if campaign.dial_prefix else phone
-        endpoint = f"PJSIP/{dial_no}@{campaign.carrier.name}" if campaign.carrier else f"PJSIP/{dial_no}@dialout"
+        carrier = resolve_campaign_carrier(campaign)
+        dial_prefix = campaign.dial_prefix or (carrier.dial_prefix if carrier else "")
+        dial_no = f"{dial_prefix}{phone}" if dial_prefix else phone
+        endpoint = (
+            f"Local/{dial_no}@{carrier.dialplan_context}"
+            if carrier
+            else f"PJSIP/{dial_no}@dialout"
+        )
+        cid = build_cid(campaign_id=campaign_id, lead_id=lead_id)
+        logger.info(
+            f'Originate attempt: {cid} campaign={campaign_id} lead={lead_id} phone={phone} '
+            f'carrier={carrier.name if carrier else "none"} endpoint={endpoint}'
+        )
 
-        variables = {"CALL_TYPE":"autodial","CAMPAIGN_ID":str(campaign_id),"LEAD_ID":str(lead_id),"CUSTOMER_NUMBER":phone}
+        variables = {
+            "CALL_TYPE":"autodial",
+            "CAMPAIGN_ID":str(campaign_id),
+            "LEAD_ID":str(lead_id),
+            "CUSTOMER_NUMBER":phone,
+            "RECORD_CALL":"1" if campaign.enable_recording else "0",
+        }
 
         if campaign.amd_enabled:
             variables.update({
@@ -227,16 +316,26 @@ def originate_calls(campaign_id: int, count: int) -> int:
             }, auth=auth, timeout=5)
             resp.raise_for_status()
             channel_id = resp.json().get("id","")
+            cid = build_cid(campaign_id=campaign_id, lead_id=lead_id, channel_id=channel_id)
             CallLog.objects.create(
                 campaign_id=campaign_id, lead_id=lead_id, channel_id=channel_id,
                 phone_number=phone, direction="outbound", status="initiated", started_at=timezone.now(),
             )
             initiated += 1
+            logger.info(
+                f'Originate success: {cid} campaign={campaign_id} lead={lead_id} channel={channel_id} initiated={initiated}'
+            )
         except Exception as exc:
-            logger.error(f"ARI originate failed: lead={lead_id} error={exc}")
+            logger.error(f"ARI originate failed: {cid} lead={lead_id} error={exc}")
             try:
+                complete_lead(campaign_id, lead_id)
                 get_redis().rpush(hopper_key(campaign_id), json.dumps(lead_data))
+                logger.info(
+                    f'Originate rollback: {cid} campaign={campaign_id} lead={lead_id} '
+                    f'requeued_after_failure=true'
+                )
             except Exception:
                 pass
 
+    logger.info(f'Originate summary: campaign={campaign_id} requested={count} initiated={initiated}')
     return initiated

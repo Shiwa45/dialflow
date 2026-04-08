@@ -1,0 +1,50 @@
+{% extends "base/base.html" %}
+{% block title %}Hourly Report — DialFlow Pro{% endblock %}
+{% block nav_report_hourly %}active{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="page-title">Hourly Distribution</div>
+    <div class="page-subtitle">{{ date }}</div>
+  </div>
+</div>
+<div class="card mb-4">
+  <div class="card-body" style="padding:12px">
+    <form method="get" style="display:flex;gap:10px;align-items:center">
+      <input class="form-input" name="date" type="date" value="{{ date }}" style="width:155px">
+      <select class="form-input" name="campaign_id" style="width:200px">
+        <option value="">All Campaigns</option>
+        {% for c in campaigns %}<option value="{{ c.id }}"{% if campaign_id == c.id|stringformat:"d" %} selected{% endif %}>{{ c.name }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="btn btn-primary">Apply</button>
+    </form>
+  </div>
+</div>
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Hour</th><th>Total Calls</th><th>Answered</th><th>Dropped</th><th>Avg Talk</th><th>Visual</th></tr></thead>
+      <tbody>
+        {% for h in hours %}
+        <tr>
+          <td class="text-mono">{{ h.label }}</td>
+          <td class="text-mono">{{ h.total|default:0 }}</td>
+          <td class="text-mono" style="color:var(--color-success)">{{ h.answered|default:0 }}</td>
+          <td class="text-mono" style="color:var(--color-danger)">{{ h.dropped|default:0 }}</td>
+          <td class="text-mono">{% if h.avg_talk %}{{ h.avg_talk|floatformat:0 }}s{% else %}—{% endif %}</td>
+          <td style="width:200px">
+            {% if h.total %}
+            <div style="display:flex;gap:1px;height:16px;border-radius:3px;overflow:hidden">
+              {% if h.answered %}<div style="width:{% widthratio h.answered h.total 100 %}%;background:var(--color-success)" title="Answered"></div>{% endif %}
+              {% if h.dropped %}<div style="width:{% widthratio h.dropped h.total 100 %}%;background:var(--color-danger)" title="Dropped"></div>{% endif %}
+              <div style="flex:1;background:var(--color-border)"></div>
+            </div>
+            {% else %}<span class="text-muted text-sm">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

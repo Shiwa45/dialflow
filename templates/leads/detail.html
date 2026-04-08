@@ -11,6 +11,23 @@
       {% if lead.do_not_call %}<span class="badge" style="background:#FEF2F2;color:#991B1B;margin-left:8px">DNC</span>{% endif %}
       {% if not lead.is_active %}<span class="badge badge-offline" style="margin-left:8px">Inactive</span>{% endif %}
     </div>
+    <div style="margin-top:12px">
+      {% if lead.do_not_call %}
+      <form method="post" action="{% url 'leads:toggle_dnc' lead.pk %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary btn-sm" onclick="return confirm('Remove from DNC?')">
+          <i class="fa-solid fa-shield-halved"></i> Remove from DNC
+        </button>
+      </form>
+      {% else %}
+      <form method="post" action="{% url 'leads:toggle_dnc' lead.pk %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Add to DNC list?')">
+          <i class="fa-solid fa-ban"></i> Add to DNC
+        </button>
+      </form>
+      {% endif %}
+    </div>
   </div>
   <a href="{% url 'leads:list' %}" class="btn btn-secondary">
     <i class="fa-solid fa-arrow-left"></i> Back

@@ -1,12 +1,16 @@
 # campaigns/views.py
 import json
+import logging
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render, get_object_or_404, redirect
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from django.contrib import messages
+from django.db.models import Count, Q
 from .models import Campaign, CampaignAgent, HopperEntry, DNCEntry, Disposition
 from .hopper import get_hopper_stats
+
+logger = logging.getLogger('dialflow.dialer')
 
 
 def supervisor_required(view_func):
@@ -26,6 +30,8 @@ def supervisor_required(view_func):
 def campaign_list(request):
     campaigns = Campaign.objects.select_related(
         'asterisk_server', 'carrier', 'created_by'
+    ).annotate(
+        assigned_agents_count=Count('agents', filter=Q(agents__is_active=True), distinct=True)
     ).all()
     return render(request, 'campaigns/list.html', {'campaigns': campaigns})
 
@@ -242,6 +248,27 @@ def hopper_refill(request, pk):
     added = fill_hopper(campaign.id, target=campaign.hopper_size)
     return JsonResponse({'success': True, 'added': added,
                          'message': f'Added {added} leads to hopper'})
+
+
+@login_required
+@supervisor_required
+@require_POST
+def hopper_reset_stale(request, pk):
+    """Reset stale in-flight dialing entries back into the hopper."""
+    from campaigns.hopper import force_reset_dialing, get_hopper_stats
+    campaign = get_object_or_404(Campaign, pk=pk)
+    reset = force_reset_dialing(campaign.id)
+    stats = get_hopper_stats(campaign.id)
+    logger.info(
+        f'Manual stale reset: campaign={campaign.id} user={request.user.username} '
+        f'reset={reset} queued={stats["queued"]} in_flight={stats["in_flight"]}'
+    )
+    return JsonResponse({
+        'success': True,
+        'reset': reset,
+        'hopper': stats,
+        'message': f'Reset {reset} stale dialing entr{"y" if reset == 1 else "ies"}',
+    })
 
 
 # ── DNC Bulk CSV Import ───────────────────────────────────────────────────────

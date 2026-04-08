@@ -97,12 +97,15 @@ def call_connected_event(call_id: str, lead: dict, bridge_id: str):
     }
 
 
-def call_ended_event(call_id: str, needs_disposition: bool = True):
-    return {
+def call_ended_event(call_id: str, needs_disposition: bool = True, call_log_id: int | None = None):
+    payload = {
         'type': 'call_ended',
         'call_id': call_id,
         'needs_disposition': needs_disposition,
     }
+    if call_log_id is not None:
+        payload['call_log_id'] = call_log_id
+    return payload
 
 
 def wrapup_timeout_warning_event(agent_id: int, seconds_remaining: int):

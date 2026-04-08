@@ -24,7 +24,7 @@
           <th>Campaign</th>
           <th>Status</th>
           <th>Mode</th>
-          <th>Agents</th>
+          <th>Assigned</th>
           <th>Calls Today</th>
           <th>Answered</th>
           <th>Abandon %</th>
@@ -40,14 +40,21 @@
           </td>
           <td><span class="badge badge-{{ c.status }}">{{ c.get_status_display }}</span></td>
           <td class="text-sm">{{ c.get_dial_mode_display }}</td>
-          <td class="text-mono" id="camp-agents-{{ c.pk }}">{{ c.stat_agents_active }}</td>
+          <td>
+            <a href="{% url 'campaigns:agents' c.pk %}" class="text-mono" id="camp-agents-{{ c.pk }}" style="font-weight:600">
+              {{ c.assigned_agents_count }}
+            </a>
+            <div class="text-sm text-muted">
+              <a href="{% url 'campaigns:agents' c.pk %}">Manage Agents</a>
+            </div>
+          </td>
           <td class="text-mono" id="camp-calls-{{ c.pk }}">{{ c.stat_calls_today }}</td>
           <td class="text-mono" id="camp-answered-{{ c.pk }}">{{ c.stat_answered_today }}</td>
           <td class="text-mono" id="camp-abandon-{{ c.pk }}">{{ c.stat_abandon_rate|floatformat:1 }}%</td>
           <td>
             <div style="display:flex;gap:6px">
               {% if c.status != 'active' %}
-              <button class="btn btn-success btn-sm btn-icon" title="Start"
+              <button class="btn btn-success btn-sm btn-icon" title="{% if c.status == 'paused' %}Resume{% else %}Start{% endif %}"
                 onclick="ctrl({{ c.pk }},'start')"><i class="fa-solid fa-play"></i></button>
               {% endif %}
               {% if c.status == 'active' %}
@@ -60,6 +67,9 @@
               {% endif %}
               <a href="{% url 'campaigns:edit' c.pk %}" class="btn btn-secondary btn-sm btn-icon" title="Edit">
                 <i class="fa-solid fa-pen"></i>
+              </a>
+              <a href="{% url 'campaigns:agents' c.pk %}" class="btn btn-secondary btn-sm btn-icon" title="Manage Agents">
+                <i class="fa-solid fa-users"></i>
               </a>
             </div>
           </td>
@@ -75,15 +85,21 @@
 </div>
 
 <script>
-const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+const csrfToken = '{{ csrf_token|escapejs }}';
 
 async function ctrl(id, action) {
   const res  = await fetch(`/campaigns/${id}/control/`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf },
-    body:    `action=${action}`,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrfToken },
+    credentials: 'same-origin',
+    body:    new URLSearchParams({ action }).toString(),
   });
-  if ((await res.json()).success) location.reload();
+  const data = await res.json();
+  if (data.success) {
+    location.reload();
+    return;
+  }
+  DF.toast(data.error || 'Campaign action failed', 'error');
 }
 
 // Live stats via supervisor WS

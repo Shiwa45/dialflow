@@ -51,7 +51,9 @@ class AgentConsumer(AsyncWebsocketConsumer):
         await self.send_snapshot()
 
     async def disconnect(self, code):
-        await self.channel_layer.group_discard(self.group, self.channel_name)
+        group = getattr(self, 'group', None)
+        if group:
+            await self.channel_layer.group_discard(group, self.channel_name)
         logger.info(f'Agent WS disconnected: {getattr(self, "user", "unknown")} code={code}')
 
     # ── Receive from browser ──────────────────────────────────────────────────
@@ -137,8 +139,21 @@ class AgentConsumer(AsyncWebsocketConsumer):
         notes          = data.get('notes', '').strip()
         callback_at    = data.get('callback_at')  # ISO string or null
 
-        if not disposition_id or not call_log_id:
-            await self._send({'type': 'error', 'message': 'disposition_id and call_log_id required'})
+        if not disposition_id:
+            await self._send({'type': 'error', 'message': 'disposition_id required'})
+            return
+
+        # Be resilient to stale/missing frontend call ids after reconnect/refresh.
+        try:
+            call_log_id = int(call_log_id) if call_log_id is not None else None
+        except Exception:
+            call_log_id = None
+
+        if not call_log_id:
+            call_log_id = await sync_to_async(self._get_pending_wrapup_call_log_id)()
+
+        if not call_log_id:
+            await self._send({'type': 'error', 'message': 'No pending wrapup call found'})
             return
 
         result = await sync_to_async(self._save_disposition)(
@@ -146,9 +161,12 @@ class AgentConsumer(AsyncWebsocketConsumer):
         )
 
         if result.get('success'):
+            logger.info(f"Disposition saved for agent {self.user.username}, call {call_log_id}")
             await self._send({'type': 'dispose_ok', 'call_log_id': call_log_id})
         else:
-            await self._send({'type': 'error', 'message': result.get('error', 'Disposition failed')})
+            err = result.get('error', 'Disposition failed')
+            logger.warning(f"Disposition failed for agent {self.user.username}: {err}")
+            await self._send({'type': 'error', 'message': err})
 
     async def handle_hangup(self, data):
         """Agent-initiated hangup — tells ARI to hang up the bridge."""
@@ -202,6 +220,28 @@ class AgentConsumer(AsyncWebsocketConsumer):
         from agents.models import AgentStatus
         AgentStatus.objects.filter(user=self.user).update(active_campaign_id=campaign_id)
 
+    def _get_assigned_campaigns(self):
+        from campaigns.models import Campaign
+        return list(
+            Campaign.objects.filter(
+                agents__agent=self.user,
+                agents__is_active=True,
+                status__in=['active', 'paused'],
+            ).order_by('id')
+        )
+
+    def _ensure_active_campaign(self, agent_status):
+        assigned_campaigns = self._get_assigned_campaigns()
+        valid_ids = {campaign.id for campaign in assigned_campaigns}
+        if agent_status.active_campaign_id in valid_ids:
+            return assigned_campaigns
+
+        new_campaign = assigned_campaigns[0] if len(assigned_campaigns) == 1 else None
+        if agent_status.active_campaign_id != (new_campaign.id if new_campaign else None):
+            agent_status.active_campaign = new_campaign
+            agent_status.save(update_fields=['active_campaign', 'updated_at'])
+        return assigned_campaigns
+
     def _validate_campaign_assignment(self, campaign_id: int) -> bool:
         from campaigns.models import CampaignAgent
         return CampaignAgent.objects.filter(
@@ -216,6 +256,14 @@ class AgentConsumer(AsyncWebsocketConsumer):
             return AgentStatus.objects.get(user=self.user).active_channel_id
         except Exception:
             return ''
+
+    def _get_pending_wrapup_call_log_id(self):
+        from agents.models import AgentStatus
+        try:
+            status = AgentStatus.objects.get(user=self.user)
+            return status.wrapup_call_log_id or status.active_call_log_id
+        except Exception:
+            return None
 
     def _ari_hangup(self, channel_id: str):
         """Fire hangup via ARI REST."""
@@ -268,7 +316,6 @@ class AgentConsumer(AsyncWebsocketConsumer):
                     'disposition':  disposition,
                     'notes':        notes,
                     'callback_at':  cb_time,
-                    'auto_applied': False,
                 }
             )
 
@@ -350,16 +397,20 @@ class AgentConsumer(AsyncWebsocketConsumer):
         from calls.models import CallLog
 
         agent_status = self._get_agent_status()
+        assigned_campaigns = self._ensure_active_campaign(agent_status)
 
         # Campaigns this agent is assigned to
-        assigned_campaigns = list(
-            Campaign.objects.filter(
-                agents__agent=self.user,
-                agents__is_active=True,
-                status__in=['active', 'paused'],
-            ).values('id', 'name', 'status', 'dial_mode',
-                     'auto_wrapup_enabled', 'auto_wrapup_timeout')
-        )
+        assigned_campaigns_data = [
+            {
+                'id': campaign.id,
+                'name': campaign.name,
+                'status': campaign.status,
+                'dial_mode': campaign.dial_mode,
+                'auto_wrapup_enabled': campaign.auto_wrapup_enabled,
+                'auto_wrapup_timeout': campaign.auto_wrapup_timeout,
+            }
+            for campaign in assigned_campaigns
+        ]
 
         # Dispositions for active campaign
         dispositions = []
@@ -373,11 +424,12 @@ class AgentConsumer(AsyncWebsocketConsumer):
                 )
             )
 
-        # Wrapup state — is there a pending disposition?
+        # Wrapup state — keep disposition flow recoverable across page refresh.
         pending_call = None
-        if agent_status.status == 'wrapup' and agent_status.wrapup_call_log_id:
+        pending_call_log_id = agent_status.wrapup_call_log_id or agent_status.active_call_log_id
+        if agent_status.status == 'wrapup' and pending_call_log_id:
             try:
-                cl = CallLog.objects.select_related('lead').get(id=agent_status.wrapup_call_log_id)
+                cl = CallLog.objects.select_related('lead').get(id=pending_call_log_id)
                 pending_call = {
                     'id':          cl.id,
                     'lead_id':     cl.lead_id,
@@ -386,6 +438,7 @@ class AgentConsumer(AsyncWebsocketConsumer):
                     'duration':    cl.duration,
                     'campaign_id': cl.campaign_id,
                 }
+                pending_call_log_id = cl.id
             except Exception:
                 pass
 
@@ -405,9 +458,10 @@ class AgentConsumer(AsyncWebsocketConsumer):
             'status_display':     agent_status.get_status_display(),
             'status_since':       agent_status.status_changed_at.isoformat(),
             'active_campaign_id': agent_status.active_campaign_id,
-            'campaigns':          assigned_campaigns,
+            'campaigns':          assigned_campaigns_data,
             'dispositions':       dispositions,
             'wrapup_seconds_remaining': agent_status.get_wrapup_seconds_remaining(),
+            'pending_call_log_id': pending_call_log_id,
             'pending_call':       pending_call,
             'stats_today': {
                 'calls':    today_stats['total']    or 0,
@@ -415,4 +469,3 @@ class AgentConsumer(AsyncWebsocketConsumer):
                 'talk_sec': today_stats['talk_sec'] or 0,
             },
         }
-
