@@ -19,7 +19,13 @@ def sync_phone_to_asterisk(sender, instance, **kwargs):
             instance.sync_to_asterisk()
             logger.info(f'Phone {instance.extension} synced to Asterisk realtime tables.')
         except Exception as e:
-            logger.error(f'Failed to sync phone {instance.extension} to Asterisk: {e}')
+            logger.error(
+                f'Failed to sync phone {instance.extension} to Asterisk realtime: {e}. '
+                f'The phone was saved in Django but PJSIP rows (ps_endpoints/ps_auths/ps_aors) '
+                f'may be missing. Use Admin → Phones → "Sync to Asterisk" action to retry.'
+            )
+            # Store the sync error on the instance so callers (e.g. admin actions) can surface it
+            instance._sync_error = str(e)
     else:
         # Deactivated phone — remove from Asterisk so it can't register
         try:

@@ -47,8 +47,18 @@ class AgentConsumer(AsyncWebsocketConsumer):
 
         logger.info(f'Agent WS connected: {user.username}')
 
-        # Send full state snapshot on connect so dashboard restores correctly
-        await self.send_snapshot()
+        # Recover stranded wrapup: if the agent is in wrapup with no call log
+        # (the call log was never written or was cleaned up) there is nothing to
+        # disposition — auto-restore to ready so they aren't blocked forever.
+        await sync_to_async(self._recover_stranded_wrapup)()
+
+        # If the agent was ready, temporarily set them offline to prevent the
+        # dialer picking them up before their SIP phone re-registers.
+        # The snapshot includes restore_to='ready' so the JS auto-restores once
+        # JsSIP fires 'registered'.
+        restore_to_ready = await sync_to_async(self._park_if_ready)()
+
+        await self.send_snapshot(restore_to_ready=restore_to_ready)
 
     async def disconnect(self, code):
         group = getattr(self, 'group', None)
@@ -189,12 +199,81 @@ class AgentConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.warning(f'AgentConsumer._send failed: {e}')
 
-    async def send_snapshot(self):
+    async def send_snapshot(self, restore_to_ready: bool = False):
         """Push full current state to a freshly-connected agent."""
         snapshot = await sync_to_async(self._build_snapshot)()
+        if restore_to_ready:
+            snapshot['restore_to'] = 'ready'
         await self._send({'type': 'snapshot', **snapshot})
 
     # ── DB operations (called via sync_to_async) ──────────────────────────────
+
+    def _park_if_ready(self) -> bool:
+        """
+        If the agent is currently ready, set them to offline temporarily.
+        The dialer only picks up ready agents, so this prevents them from
+        receiving a call before their SIP phone re-registers after page reload.
+        Returns True if an agent should be restored to ready once JsSIP registers.
+
+        Two cases handled:
+          1. Agent is 'ready' → park to 'offline' now, return True.
+          2. Agent is already 'offline' (parked by a previous WS connect that
+             dropped before JsSIP finished registering) → don't re-park, but
+             still return True so the snapshot includes restore_to='ready'.
+             Heuristic: offline within the last 90 s = mid-reconnect window.
+        """
+        from agents.models import AgentStatus
+        from core.ws_utils import broadcast_supervisor
+        from datetime import timedelta
+
+        # Case 1: agent is ready — park them
+        parked = AgentStatus.objects.filter(
+            user=self.user, status='ready',
+        ).update(
+            status='offline',
+            status_changed_at=timezone.now(),
+            updated_at=timezone.now(),
+        )
+        if parked:
+            broadcast_supervisor({
+                'type':     'agent_status_changed',
+                'agent_id': self.user.id,
+                'status':   'offline',
+                'reason':   'sip_reconnecting',
+            })
+            return True
+
+        # Case 2: already offline — check if it was a recent park (WS reconnect)
+        # If the agent went offline within the last 90 seconds they are almost
+        # certainly in the middle of a reconnect cycle, not manually offline.
+        recently_parked = AgentStatus.objects.filter(
+            user=self.user,
+            status='offline',
+            status_changed_at__gte=timezone.now() - timedelta(seconds=90),
+        ).exists()
+        return recently_parked
+
+    def _recover_stranded_wrapup(self):
+        """
+        If an agent is in wrapup but has no pending call log id, there is
+        nothing to disposition — auto-restore to ready so the agent isn't
+        blocked indefinitely.  This can happen when:
+          • The page was refreshed after the call log was already cleaned up.
+          • ARI wrapup state was set but the call log write failed.
+        """
+        from agents.models import AgentStatus
+        qs = AgentStatus.objects.filter(
+            user=self.user,
+            status='wrapup',
+            wrapup_call_log_id__isnull=True,
+            active_call_log_id__isnull=True,
+        )
+        if qs.exists():
+            logger.info(
+                'Recovering stranded wrapup for %s (no call log) — restoring to ready.',
+                self.user.username,
+            )
+            qs.first().go_ready()
 
     def _get_agent_status(self):
         from agents.models import AgentStatus

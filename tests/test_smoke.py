@@ -75,6 +75,7 @@ class TestLead:
 @pytest.mark.django_db
 class TestHopper:
     def test_hopper_fill_empty_when_no_leads(self):
+        from unittest.mock import MagicMock, patch
         from telephony.models import AsteriskServer
         from campaigns.models import Campaign
         from campaigns.hopper import fill_hopper
@@ -87,7 +88,12 @@ class TestHopper:
         campaign = Campaign.objects.create(
             name='Test Campaign', asterisk_server=server, status='active'
         )
-        result = fill_hopper(campaign.id)
+
+        mock_r = MagicMock()
+        mock_r.llen.return_value = 0   # empty hopper
+
+        with patch('campaigns.hopper.get_redis', return_value=mock_r):
+            result = fill_hopper(campaign.id)
         assert result == 0  # No leads assigned
 
 
@@ -99,7 +105,8 @@ class TestAgentStatus:
         user = django_user_model.objects.create_user(
             username='agent1', password='pass', role='agent'
         )
-        status = AgentStatus.objects.create(user=user)
+        # Signal (users/signals.py) creates AgentStatus on user creation
+        status, _ = AgentStatus.objects.get_or_create(user=user)
 
         assert status.status == 'offline'
         assert status.wrapup_elapsed_seconds == 0
@@ -111,8 +118,8 @@ class TestAgentStatus:
         user = django_user_model.objects.create_user(
             username='agent2', password='pass', role='agent'
         )
-        status = AgentStatus.objects.create(user=user)
-        # go_ready would normally broadcast WS — skip that in tests
+        # Signal (users/signals.py) creates AgentStatus on user creation
+        status, _ = AgentStatus.objects.get_or_create(user=user)
         status.status = 'ready'
         status.save(update_fields=['status'])
         status.refresh_from_db()

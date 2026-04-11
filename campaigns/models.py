@@ -125,6 +125,13 @@ class Campaign(TimestampedModel):
     dial_timeout    = models.PositiveIntegerField(default=30, help_text='Ring timeout in seconds')
     abandon_rate    = models.DecimalField(max_digits=5, decimal_places=2, default=3.0,
                                           help_text='Target max abandon rate %')
+    # CPS throttle — caps the number of ARI originations per second.
+    # 0 = unlimited (not recommended in production). Default 10 is safe for
+    # most Asterisk deployments; raise for high-volume trunks.
+    cps_limit       = models.PositiveSmallIntegerField(
+        default=10,
+        help_text='Maximum call originations per second (0 = unlimited)',
+    )
 
     # Hopper
     hopper_level = models.PositiveIntegerField(default=100,

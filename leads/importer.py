@@ -51,7 +51,8 @@ ALLOWED_FIELDS = {
 
 
 def _normalise_header(raw: str) -> str:
-    key = raw.strip().lower().replace(' ', '_').replace('-', '_')
+    # Strip whitespace AND the UTF-8 BOM that Excel adds to the first column
+    key = raw.strip().lstrip('\ufeff').lower().replace(' ', '_').replace('-', '_')
     return FIELD_ALIASES.get(key, key)
 
 

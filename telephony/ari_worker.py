@@ -251,29 +251,46 @@ class ARIEventHandler:
         agent_id = int(agent_id)
         self.agent_channels[agent_id] = channel_id
 
-        # Answer the agent channel
-        await sync_to_async(self.ari.answer)(channel_id)
-        logger.info(f'Agent {agent_id} channel {channel_id} answered and in Stasis.')
+        # DO NOT call ari.answer() here.
+        # This channel is an ARI-originated OUTBOUND leg (Asterisk → JsSIP).
+        # Calling answer() on an outbound PJSIP channel while it is still
+        # RINGING causes Asterisk to send SIP CANCEL to the browser, which is
+        # exactly the "cause=Canceled originator=remote" failure we want to
+        # prevent.  For originate_to_app channels, the SIP answer is handled
+        # entirely by JsSIP sending 200 OK — no ARI answer call is needed.
+        logger.info(f'Agent {agent_id} channel {channel_id} in Stasis.')
 
-        # Check if there's a pending bridge waiting for this agent
+        # Check if there's a pending bridge waiting for this agent.
+        # Primary lookup: channel id (normal case — StasisStart arrived after originate).
         pending = self.pending_bridges.pop(channel_id, None)
         if not pending:
-            # Some Asterisk topologies can emit a different channel id in StasisStart
-            # than the one returned by originate. Fall back to agent-based matching.
+            # Fallback: agent-id lookup.  Covers two cases:
+            #   a) StasisStart arrived before originate_to_app returned (race condition
+            #      handled by pre-registering pending_by_agent before the HTTP call).
+            #   b) Asterisk assigned a different channel id in StasisStart than the one
+            #      returned by originate (seen on some Asterisk versions).
             pending = self.pending_by_agent.pop(agent_id, None)
             if pending:
                 stale_channel_id = pending.get('originated_agent_channel')
-                if stale_channel_id:
+                if stale_channel_id and stale_channel_id != channel_id:
                     self.pending_bridges.pop(stale_channel_id, None)
+
         if pending:
             await self._complete_bridge(channel_id, pending)
         else:
+            # No pending bridge found.  Check if _await_agent_answer already
+            # completed the bridge (it pops pending_bridges and adds the agent
+            # channel to active_calls).  If so, do nothing — the call is alive.
+            if channel_id in self.active_calls:
+                logger.debug(f'Agent channel {channel_id} already has active call — bridge completed by _await_agent_answer.')
+                return
+            # Truly orphaned: release only if agent is still in on_call state.
             cid = build_cid(agent_channel=channel_id)
             logger.warning(
-                f'Agent leg has no pending customer bridge. {cid} agent={agent_id} agent_channel={channel_id} '
-                'Keeping agent in ready state.'
+                f'Agent leg has no pending customer bridge. {cid} agent={agent_id} '
+                f'agent_channel={channel_id} — releasing agent reservation.'
             )
-            await sync_to_async(self._set_agent_status)(agent_id, 'ready', channel_id)
+            await sync_to_async(self._release_agent_reservation)(agent_id)
 
     async def _bridge_customer_to_agent(self, channel_id, agent, campaign_id, lead_id):
         """Originate a call to the agent's PJSIP endpoint, then bridge when agent answers."""
@@ -297,11 +314,29 @@ class ARIEventHandler:
         }
         cid = build_cid(campaign_id=campaign_id, lead_id=lead_id, customer_channel=channel_id)
 
+        # ── RACE-CONDITION FIX ──────────────────────────────────────────────────
+        # StasisStart for the agent channel can arrive on the ARI WebSocket BEFORE
+        # originate_to_app's HTTP response returns (asyncio yields to the event loop
+        # while the HTTP call runs in the thread pool).  If that happens,
+        # _handle_agent_leg finds pending_bridges empty and wrongly releases the
+        # agent.  Pre-registering pending_by_agent (keyed only on agent id, since we
+        # don't know the channel id yet) lets _handle_agent_leg find the bridge via
+        # its agent-id fallback even in that early-StasisStart scenario.
+        pending = {
+            'customer_channel':         channel_id,
+            'agent_id':                 agent.id,
+            'campaign_id':              campaign_id,
+            'lead_id':                  lead_id,
+            'originated_agent_channel': None,   # filled in below after originate
+        }
+        self.pending_by_agent[agent.id] = pending
+
         logger.info(f'Originating agent leg: {cid} agent_id={agent.id} ext={agent_ext} customer_channel={channel_id}')
 
         result = await sync_to_async(self.ari.originate_to_app)(agent_endpoint, variables=variables)
         if not result:
             logger.error(f'Failed to originate agent leg: {cid} agent_id={agent.id} ext={agent_ext}')
+            self.pending_by_agent.pop(agent.id, None)
             await sync_to_async(self._release_agent_reservation)(agent.id)
             await sync_to_async(self._mark_call_dropped)(channel_id)
             await sync_to_async(self.ari.hangup)(channel_id)
@@ -315,16 +350,16 @@ class ARIEventHandler:
             agent_channel=agent_channel_id,
         )
 
-        # Store pending bridge — will be completed when agent's StasisStart fires
-        pending = {
-            'customer_channel': channel_id,
-            'agent_id':         agent.id,
-            'campaign_id':      campaign_id,
-            'lead_id':          lead_id,
-            'originated_agent_channel': agent_channel_id,
-        }
+        # Update pending with real channel id (same dict object — pending_by_agent
+        # already holds a reference to it, so this update is visible there too).
+        pending['originated_agent_channel'] = agent_channel_id
         self.pending_bridges[agent_channel_id] = pending
-        self.pending_by_agent[agent.id] = pending
+        # Note: pending_by_agent[agent.id] already points to this same dict.
+
+        # Notify agent dashboard immediately so it shows the ringing call
+        lead_info     = await sync_to_async(self._get_lead_info)(lead_id)
+        campaign_info = await sync_to_async(self._get_campaign_info)(campaign_id)
+        await sync_to_async(self._ws_call_incoming)(agent.id, channel_id, lead_info, campaign_info)
 
         logger.info(f'Waiting for agent answer: {cid} agent_id={agent.id} agent_channel={agent_channel_id}')
         asyncio.create_task(self._await_agent_answer(agent_channel_id, agent.id))
@@ -399,10 +434,30 @@ class ARIEventHandler:
         if customer_channel_id not in self.active_calls:
             logger.warning(f'Customer channel gone before bridge completion. {cid}')
             await sync_to_async(self.ari.hangup)(agent_channel_id)
+            # Customer never associated with agent — release the DB reservation
+            await sync_to_async(self._release_agent_reservation)(agent_id)
             return
+
+        # Guard against double bridge creation (e.g. early StasisStart via
+        # _handle_agent_leg AND later _await_agent_answer both calling us).
+        if self.active_calls[customer_channel_id].get('bridge_id'):
+            logger.warning(f'Bridge already exists for customer {customer_channel_id}, skipping duplicate _complete_bridge. {cid}')
+            return
+
+        # ── CRITICAL: stamp agent_id on the customer entry NOW, before any await ──
+        # on_channel_destroyed reads this to call _set_agent_wrapup. Without this,
+        # a customer hangup during moh_stop/create_bridge/add_to_bridge would leave
+        # the agent permanently stuck in on_call with no cleanup path.
+        self.active_calls[customer_channel_id]['agent_id'] = agent_id
 
         # Stop hold music on customer
         await sync_to_async(self.ari.moh_stop)(customer_channel_id)
+
+        # Customer may have hung up while moh_stop was in flight
+        if customer_channel_id not in self.active_calls:
+            logger.warning(f'Customer hung up during moh_stop. {cid}')
+            await sync_to_async(self.ari.hangup)(agent_channel_id)
+            return  # on_channel_destroyed already triggered _set_agent_wrapup
 
         # Create bridge
         bridge_name   = f'bridge_{campaign_id}_{lead_id}_{int(time.time())}'
@@ -411,13 +466,25 @@ class ARIEventHandler:
             logger.error(f'Failed to create ARI bridge. {cid}')
             await sync_to_async(self.ari.hangup)(customer_channel_id)
             await sync_to_async(self.ari.hangup)(agent_channel_id)
-            return
+            return  # ChannelDestroyed will trigger _set_agent_wrapup via agent_id we stamped
 
         bridge_id = bridge_result.get('id')
+
+        # Customer may have hung up during create_bridge
+        if customer_channel_id not in self.active_calls:
+            logger.warning(f'Customer hung up during bridge creation. {cid}')
+            await sync_to_async(self.ari.hangup)(agent_channel_id)
+            return
 
         # Add both channels to the bridge
         await sync_to_async(self.ari.add_to_bridge)(bridge_id, customer_channel_id)
         await sync_to_async(self.ari.add_to_bridge)(bridge_id, agent_channel_id)
+
+        # Final check — customer could have hung up during add_to_bridge
+        if customer_channel_id not in self.active_calls:
+            logger.warning(f'Customer hung up during add_to_bridge. {cid}')
+            await sync_to_async(self.ari.hangup)(agent_channel_id)
+            return
 
         self.active_bridges[bridge_id] = {
             'customer_channel': customer_channel_id,
@@ -427,8 +494,8 @@ class ARIEventHandler:
             'lead_id':          lead_id,
             'created_at':       timezone.now(),
         }
+        # agent_id already stamped above; just update bridge_id
         self.active_calls[customer_channel_id]['bridge_id'] = bridge_id
-        self.active_calls[customer_channel_id]['agent_id']  = agent_id
 
         # Track agent channel in active_calls too
         self.active_calls[agent_channel_id] = {
@@ -480,11 +547,11 @@ class ARIEventHandler:
                 channel_id, lead_id, duration, call_data.get('bridge_id')
             )
 
-            # Push call_ended to agent — they need to see disposition modal
+            # Write wrapup state to DB FIRST so a page refresh gets correct snapshot,
+            # then push call_ended so the live browser shows the disposition modal.
             if agent_id:
-                await sync_to_async(self._ws_call_ended)(agent_id, channel_id, call_log_id)
-                # Set agent to wrapup state in DB
                 await sync_to_async(self._set_agent_wrapup)(agent_id, channel_id, call_log_id)
+                await sync_to_async(self._ws_call_ended)(agent_id, channel_id, call_log_id)
 
     async def on_channel_state_change(self, event):
         channel_id = event.get('channel', {}).get('id', '')
@@ -566,13 +633,21 @@ class ARIEventHandler:
     def _release_agent_reservation(self, agent_id):
         """Return a pre-reserved agent back to ready when bridge setup fails."""
         from agents.models import AgentStatus
-        AgentStatus.objects.filter(user_id=agent_id, status='on_call').update(
+        from core.ws_utils import send_to_agent
+        updated = AgentStatus.objects.filter(user_id=agent_id, status='on_call').update(
             status='ready',
             status_changed_at=timezone.now(),
             active_channel_id=None,
             active_lead_id=None,
             call_started_at=None,
         )
+        if updated:
+            send_to_agent(agent_id, {
+                'type': 'status_changed',
+                'status': 'ready',
+                'display': 'Ready',
+                'since': timezone.now().isoformat(),
+            })
 
     def _get_agent_extension(self, agent_id):
         """Look up the PJSIP extension for an agent from the Phone model."""
@@ -596,6 +671,7 @@ class ARIEventHandler:
 
     def _set_agent_on_call(self, agent_id, channel_id, lead_id, campaign_id):
         from agents.models import AgentStatus
+        from core.ws_utils import send_to_agent
         AgentStatus.objects.filter(user_id=agent_id).update(
             status='on_call',
             active_channel_id=channel_id,
@@ -603,6 +679,12 @@ class ARIEventHandler:
             active_campaign_id=campaign_id,
             call_started_at=timezone.now(),
         )
+        send_to_agent(agent_id, {
+            'type': 'status_changed',
+            'status': 'on_call',
+            'display': 'On Call',
+            'since': timezone.now().isoformat(),
+        })
 
     def _set_agent_wrapup(self, agent_id, channel_id, call_log_id=None):
         from agents.models import AgentStatus
@@ -689,6 +771,18 @@ class ARIEventHandler:
         except Exception:
             return {}
 
+    def _get_campaign_info(self, campaign_id):
+        from campaigns.models import Campaign
+        try:
+            c = Campaign.objects.get(id=campaign_id)
+            return {'id': c.id, 'name': c.name}
+        except Exception:
+            return {}
+
+    def _ws_call_incoming(self, agent_id, call_id, lead_info, campaign_info):
+        from core.ws_utils import send_to_agent, call_incoming_event
+        send_to_agent(agent_id, call_incoming_event(call_id, lead_info, campaign_info))
+
     def _ws_call_connected(self, agent_id, call_id, bridge_id, lead_info):
         from core.ws_utils import send_to_agent, call_connected_event
         send_to_agent(agent_id, call_connected_event(call_id, lead_info, bridge_id))
@@ -702,6 +796,62 @@ class ARIEventHandler:
 
 
 # ─── WebSocket Loop ───────────────────────────────────────────────────────────
+
+def _reset_stuck_on_call_agents(ari: 'ARIClient'):
+    """
+    On ARI startup: find agents stuck in on_call with no live Asterisk channel
+    (left over from a previous process crash / restart) and recover them.
+
+    Agents WITH a live channel are left alone — the event handler will clean up
+    when those calls naturally end.  Agents WITHOUT a live channel are moved to
+    wrapup (so they can disposition) or ready (if no call log exists).
+    """
+    from agents.models import AgentStatus
+    from core.ws_utils import send_to_agent
+
+    channels = ari.get('/channels') or []
+    live_ids  = {ch.get('id') for ch in channels if isinstance(ch, dict)}
+
+    stuck = AgentStatus.objects.filter(status='on_call').select_related('user')
+    count = 0
+    for st in stuck:
+        if st.active_channel_id and st.active_channel_id in live_ids:
+            continue  # genuinely on a live call — don't touch
+
+        logger.warning(
+            'Startup cleanup: %s stuck on_call (channel=%s absent from ARI)',
+            st.user.username, st.active_channel_id,
+        )
+        if st.active_call_log_id:
+            # Call log exists → transition to wrapup so agent can dispose
+            AgentStatus.objects.filter(pk=st.pk, status='on_call').update(
+                status='wrapup',
+                wrapup_started_at=timezone.now(),
+                wrapup_call_log_id=st.active_call_log_id,
+                active_channel_id=None,
+                updated_at=timezone.now(),
+            )
+            send_to_agent(st.user_id, {
+                'type': 'status_changed', 'status': 'wrapup', 'display': 'Wrap-up',
+            })
+        else:
+            # No call log → just return to ready
+            AgentStatus.objects.filter(pk=st.pk, status='on_call').update(
+                status='ready',
+                status_changed_at=timezone.now(),
+                active_channel_id=None,
+                active_lead_id=None,
+                call_started_at=None,
+                updated_at=timezone.now(),
+            )
+            send_to_agent(st.user_id, {
+                'type': 'status_changed', 'status': 'ready', 'display': 'Ready',
+            })
+        count += 1
+
+    if count:
+        logger.info('ARI startup cleanup: recovered %d stuck agent(s)', count)
+
 
 async def run_ari_worker(server_config: dict):
     """
@@ -721,8 +871,9 @@ async def run_ari_worker(server_config: dict):
         f"/ari/events?app={server_config['ARI_APP_NAME']}"
         f"&api_key={server_config['ARI_USERNAME']}:{server_config['ARI_PASSWORD']}"
     )
-    delay      = 2   # initial reconnect delay (seconds)
-    max_delay  = 60
+    delay           = 2   # initial reconnect delay (seconds)
+    max_delay       = 60
+    startup_cleanup = True  # run cleanup only on first successful connection
 
     while True:
         try:
@@ -734,16 +885,27 @@ async def run_ari_worker(server_config: dict):
                 # Update server status in DB
                 await sync_to_async(_mark_server_connected)(server_config['ARI_HOST'])
 
+                # On first connection: reset any agents stuck in on_call from a
+                # previous process run (crash recovery).
+                if startup_cleanup:
+                    await sync_to_async(_reset_stuck_on_call_agents)(ari)
+                    startup_cleanup = False
+
                 async for raw in ws:
                     event = json.loads(raw)
                     await handler.handle(event)
 
-        except websockets.exceptions.ConnectionClosed as e:
-            logger.warning(f'ARI WebSocket closed: {e}. Reconnecting in {delay}s …')
+        except (
+            websockets.exceptions.ConnectionClosed,
+            websockets.exceptions.InvalidHandshake,   # includes InvalidMessage
+        ) as e:
+            logger.warning('ARI WebSocket error: %s. Reconnecting in %ss …', e or type(e).__name__, delay)
         except OSError as e:
-            logger.warning(f'ARI connection error: {e}. Reconnecting in {delay}s …')
+            # Covers ConnectionRefusedError, ConnectionResetError, WinError 64, etc.
+            msg = str(e).strip() or type(e).__name__
+            logger.warning('ARI connection error: %s. Reconnecting in %ss …', msg, delay)
         except Exception as e:
-            logger.exception(f'Unexpected ARI error: {e}. Reconnecting in {delay}s …')
+            logger.exception('Unexpected ARI error: %s. Reconnecting in %ss …', e, delay)
 
         await sync_to_async(_mark_server_disconnected)(server_config['ARI_HOST'])
         await asyncio.sleep(delay)

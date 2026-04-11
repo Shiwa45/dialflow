@@ -186,7 +186,8 @@ class TestAgentStatus:
     def test_initial_status_offline(self, django_user_model):
         from agents.models import AgentStatus
         user = self._make_agent(django_user_model, 'ag_init')
-        status = AgentStatus.objects.create(user=user)
+        # Signal (users/signals.py) creates AgentStatus on user creation
+        status, _ = AgentStatus.objects.get_or_create(user=user)
         assert status.status == 'offline'
 
     def test_wrapup_elapsed_not_in_wrapup(self, django_user_model):
@@ -204,8 +205,8 @@ class TestAgentStatus:
     def test_direct_status_save(self, django_user_model):
         from agents.models import AgentStatus
         user = self._make_agent(django_user_model, 'ag_direct')
-        status = AgentStatus.objects.create(user=user)
-        # Direct save (bypassing WS broadcast)
+        # Signal (users/signals.py) creates AgentStatus on user creation
+        status, _ = AgentStatus.objects.get_or_create(user=user)
         status.status = 'ready'
         status.save(update_fields=['status'])
         status.refresh_from_db()

@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'agents.apps.AgentsConfig',
     'calls.apps.CallsConfig',
     'reports.apps.ReportsConfig',
+    'ai_dialer.apps.AIDialerConfig',
 ]
 
 MIDDLEWARE = [

@@ -134,12 +134,40 @@ def cleanup_zombie_agents():
     ).select_related('user')
 
     for agent_status in zombies:
+        lag = (timezone.now() - agent_status.last_heartbeat).total_seconds()
         logger.warning(
-            f'Zombie cleanup: {agent_status.user.username} '
-            f'last_heartbeat={agent_status.last_heartbeat}'
+            'Zombie cleanup: %s last_heartbeat=%s lag=%.0fs → forcing offline',
+            agent_status.user.username, agent_status.last_heartbeat, lag,
         )
         agent_status.go_offline()
         cleaned += 1
+
+        # Notify the agent's browser tab (if still open) so it can show a
+        # "session expired" message rather than silently going stale.
+        try:
+            send_to_agent(
+                agent_status.user_id,
+                {
+                    'type':   'force_logout',
+                    'reason': f'Session expired — no heartbeat for {int(lag)}s.',
+                },
+            )
+        except Exception:
+            pass
+
+        # Let the supervisor monitor know an agent went zombie-offline.
+        try:
+            broadcast_supervisor({
+                'type':     'agent_status_changed',
+                'agent_id': agent_status.user_id,
+                'status':   'offline',
+                'reason':   'zombie_timeout',
+            })
+        except Exception:
+            pass
+
+    if cleaned:
+        logger.info('Zombie cleanup complete: %d agent(s) set offline', cleaned)
 
     return {'cleaned': cleaned}
 

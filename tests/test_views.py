@@ -182,12 +182,21 @@ class TestCampaignViews:
         assert res.status_code == 400
 
     def test_campaign_stats_api(self, client, supervisor, asterisk_server):
+        from unittest.mock import MagicMock, patch
         from campaigns.models import Campaign
         c = Campaign.objects.create(
             name='StatsTest', asterisk_server=asterisk_server
         )
         client.login(username='viewsup', password='testpass')
-        res = client.get(f'/campaigns/{c.pk}/stats/')
+
+        mock_r = MagicMock()
+        mock_r.llen.return_value = 0
+        mock_r.hlen.return_value = 0
+        mock_r.hgetall.return_value = {}
+        mock_r.zcard.return_value = 0
+
+        with patch('campaigns.hopper.get_redis', return_value=mock_r):
+            res = client.get(f'/campaigns/{c.pk}/stats/')
         assert res.status_code == 200
         data = res.json()
         assert 'calls_today' in data
@@ -306,6 +315,49 @@ class TestCallViews:
         )
         client.login(username='viewagent', password='testpass')
         res = client.get(f'/calls/{call.pk}/')
+        assert res.status_code == 404
+
+
+    def test_dispose_endpoint_submits(self, client, agent, asterisk_server):
+        from calls.models import CallLog
+        from campaigns.models import Campaign, Disposition
+        from agents.models import AgentStatus
+
+        campaign = Campaign.objects.create(name='DispTest', asterisk_server=asterisk_server, status='active')
+        disp = Disposition.objects.create(name='Sale', category='sale', outcome='complete', color='#10B981')
+        status_obj, _ = AgentStatus.objects.get_or_create(user=agent)
+        status_obj.status = 'wrapup'
+        status_obj.save(update_fields=['status'])
+        call = CallLog.objects.create(phone_number='+919000000099', agent=agent, status='completed',
+                                       campaign=campaign)
+        client.login(username='viewagent', password='testpass')
+        res = client.post('/agents/api/dispose/', {
+            'disposition_id': disp.id,
+            'call_log_id':    call.id,
+            'notes':          'Great call',
+        })
+        assert res.status_code == 200
+        data = res.json()
+        assert data['success'] is True
+        assert data['disposition'] == 'Sale'
+        # Agent should be moved back to ready
+        status_obj.refresh_from_db()
+        assert status_obj.status == 'ready'
+
+    def test_dispose_wrong_agent_returns_404(self, client, agent, django_user_model):
+        from calls.models import CallLog
+        from campaigns.models import Disposition
+        from agents.models import AgentStatus
+
+        other = django_user_model.objects.create_user(username='other_disp', password='p', role='agent')
+        disp = Disposition.objects.create(name='No Sale', category='no_sale', outcome='no_contact', color='#EF4444')
+        call = CallLog.objects.create(phone_number='+919000000098', agent=other, status='completed')
+        AgentStatus.objects.get_or_create(user=agent)
+        client.login(username='viewagent', password='testpass')
+        res = client.post('/agents/api/dispose/', {
+            'disposition_id': disp.id,
+            'call_log_id':    call.id,
+        })
         assert res.status_code == 404
 
 

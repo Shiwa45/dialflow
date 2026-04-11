@@ -19,6 +19,7 @@ urlpatterns = [
     path('api/lead-info/',                      views.get_lead_info,        name='lead_info'),
     path('api/dispositions/',                   views.get_dispositions,     name='dispositions'),
     path('api/call-history/',                   views.call_history,         name='call_history'),
+    path('api/dispose/',                         views.submit_disposition,   name='dispose'),
     path('api/pause-codes/',                    views.get_pause_codes,      name='pause_codes'),
 
     # Supervisor actions

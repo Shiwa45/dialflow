@@ -6,6 +6,161 @@ from django.utils import timezone
 logger = logging.getLogger('dialflow.dialer')
 
 
+# ── AI outcome recording ──────────────────────────────────────────────────────
+
+@shared_task(name='campaigns.tasks.record_dialer_outcomes', max_retries=2)
+def record_dialer_outcomes():
+    """
+    Feed actual call outcomes back into the AI engine every 30 seconds.
+    This is the reinforcement loop that makes the XGBoost models improve
+    over time: after each dial window we observe answer rate, abandon rate,
+    and agent utilisation, then store them as training experiences.
+    """
+    from datetime import timedelta
+
+    from django.db.models import Avg, Count, Q
+
+    from agents.models import AgentStatus
+    from calls.models import CallLog
+    from campaigns.models import Campaign, CampaignAgent
+
+    try:
+        from ai_dialer.engine import get_ai_manager
+        manager = get_ai_manager()
+    except Exception as e:
+        logger.error(f'record_dialer_outcomes: AI manager unavailable: {e}')
+        return {'error': str(e)}
+
+    now    = timezone.now()
+    window = now - timedelta(seconds=60)  # outcomes from the last minute
+    recorded = 0
+
+    for campaign_id, dialer in list(manager._dialers.items()):
+        try:
+            stats = CallLog.objects.filter(
+                campaign_id=campaign_id,
+                started_at__gte=window,
+                ended_at__isnull=False,
+            ).aggregate(
+                total    = Count('id'),
+                answered = Count('id', filter=Q(status='completed')),
+                dropped  = Count('id', filter=Q(status='dropped')),
+            )
+
+            total    = stats['total'] or 0
+            answered = stats['answered'] or 0
+            dropped  = stats['dropped'] or 0
+
+            if total < 5:
+                # Not enough data in this window — skip
+                continue
+
+            answer_rate  = answered / total
+            abandon_rate = dropped / max(answered, 1)
+
+            # Agent utilisation = fraction of campaign agents who are on_call
+            agent_ids = list(
+                CampaignAgent.objects.filter(
+                    campaign_id=campaign_id, is_active=True
+                ).values_list('agent_id', flat=True)
+            )
+            agent_agg = AgentStatus.objects.filter(
+                user_id__in=agent_ids
+            ).aggregate(
+                total_agents  = Count('id', filter=~Q(status='offline')),
+                busy_agents   = Count('id', filter=Q(status='on_call')),
+            )
+            total_agents = agent_agg['total_agents'] or 1
+            busy_agents  = agent_agg['busy_agents'] or 0
+            utilization  = busy_agents / total_agents
+
+            dialer.record_outcome(
+                answer_rate      = answer_rate,
+                abandon_rate     = abandon_rate,
+                agent_utilization = utilization,
+            )
+            recorded += 1
+
+            logger.debug(
+                f'Outcome recorded: campaign={campaign_id} '
+                f'answer={answer_rate:.2%} abandon={abandon_rate:.2%} '
+                f'util={utilization:.2%} total_calls={total}'
+            )
+
+        except Exception as e:
+            logger.error(f'Outcome recording error campaign={campaign_id}: {e}')
+
+    return {'recorded': recorded, 'ts': timezone.now().isoformat()}
+
+
+@shared_task(name='campaigns.tasks.ai_dialer_health_report')
+def ai_dialer_health_report():
+    """
+    Log and surface health warnings from all AI dialers (every 5 minutes).
+    Emits CRITICAL log entries when any campaign's abandon rate is spiking.
+    Also cleans up dialers for campaigns that are no longer active.
+    """
+    try:
+        from ai_dialer.engine import get_ai_manager
+        manager = get_ai_manager()
+    except Exception as e:
+        logger.error(f'ai_dialer_health_report: AI manager unavailable: {e}')
+        return {'error': str(e)}
+
+    from campaigns.models import Campaign
+
+    active_ids = set(
+        Campaign.objects.filter(status=Campaign.STATUS_ACTIVE)
+        .values_list('id', flat=True)
+    )
+
+    # Remove stale dialers (campaigns that stopped)
+    stale = [cid for cid in list(manager._dialers) if cid not in active_ids]
+    for cid in stale:
+        manager.remove_dialer(cid)
+        logger.info(f'AI dialer removed: campaign={cid} (no longer active)')
+
+    statuses = manager.get_all_status()
+    critical_count = 0
+
+    for status in statuses:
+        last    = status.get('last_decision', {})
+        health  = last.get('health', 'unknown')
+        source  = last.get('ratio_source', '')
+
+        # Filter out routine operational noise — cold-start and Erlang fallback
+        # are expected during warm-up and are already logged by the predictive tick.
+        # Only surface warnings that indicate real operational problems.
+        raw_warnings = last.get('warnings', [])
+        actionable = [
+            w for w in raw_warnings
+            if 'cold start' not in w.lower() and 'erlang' not in w.lower()
+        ]
+
+        if health == 'critical':
+            critical_count += 1
+            logger.critical(
+                'CRITICAL AI dialer: campaign=%d name=%r source=%s warnings=%s',
+                status['campaign_id'], status.get('campaign_name', '?'),
+                source, actionable or raw_warnings,
+            )
+        elif health == 'warning' and actionable:
+            logger.warning(
+                'AI dialer warning: campaign=%d health=%s source=%s warnings=%s',
+                status['campaign_id'], health, source, actionable,
+            )
+
+    logger.info(
+        'AI health report: %d campaigns monitored, %d critical',
+        len(statuses), critical_count,
+    )
+    return {
+        'campaigns_monitored': len(statuses),
+        'critical': critical_count,
+        'ts': timezone.now().isoformat(),
+    }
+
+
 @shared_task(name='campaigns.tasks.predictive_dial_tick', max_retries=0)
 def predictive_dial_tick():
     """
@@ -26,7 +181,10 @@ def predictive_dial_tick():
         except Exception as e:
             logger.error(f'Predictive dial tick failed for campaign {campaign.id}: {e}')
 
-    logger.info(f'Predictive tick summary: initiated={total}')
+    if total:
+        logger.info('Predictive tick summary: initiated=%d', total)
+    else:
+        logger.debug('Predictive tick summary: initiated=0')
     return {'initiated': total, 'ts': timezone.now().isoformat()}
 
 

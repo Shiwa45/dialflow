@@ -55,6 +55,20 @@ class PhoneAdmin(admin.ModelAdmin):
 
     actions = ['sync_to_asterisk', 'remove_from_asterisk']
 
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        # The post_save signal already calls sync_to_asterisk() and stores any
+        # error on obj._sync_error.  Surface it here so the admin user sees it.
+        sync_error = getattr(obj, '_sync_error', None)
+        if sync_error:
+            self.message_user(
+                request,
+                f'Phone saved, but PJSIP sync failed for extension {obj.extension}: '
+                f'{sync_error}. '
+                f'Run "Sync to Asterisk" action after the issue is resolved.',
+                level='warning',
+            )
+
     @admin.action(description='Sync selected phones to Asterisk realtime')
     def sync_to_asterisk(self, request, queryset):
         synced = 0
@@ -62,9 +76,11 @@ class PhoneAdmin(admin.ModelAdmin):
             try:
                 phone.sync_to_asterisk()
                 synced += 1
+                self.message_user(request, f'Synced {phone.extension} ({phone.name}).', level='success')
             except Exception as e:
-                self.message_user(request, f'Failed {phone.extension}: {e}', level='error')
-        self.message_user(request, f'Synced {synced} phones.')
+                self.message_user(request, f'FAILED {phone.extension}: {e}', level='error')
+        if synced:
+            self.message_user(request, f'Successfully synced {synced} phone(s) to Asterisk.')
 
     @admin.action(description='Remove selected phones from Asterisk realtime')
     def remove_from_asterisk(self, request, queryset):

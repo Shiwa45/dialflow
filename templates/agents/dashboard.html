@@ -438,7 +438,11 @@ body { overflow-x: hidden; }
       <input type="datetime-local" id="callback-at" style="width:100%;background:var(--card-light);border:1px solid var(--border);border-radius:var(--radius-xs);padding:9px 12px;color:var(--text);font-size:.82rem;outline:none">
     </div>
     <button class="disp-save-btn" id="btn-save-disp" disabled><i class="fas fa-save"></i> Save Disposition</button>
-    <p style="text-align:center;color:var(--text-muted);font-size:.7rem;margin-top:12px">This dialog cannot be dismissed until a disposition is selected.</p>
+    <p style="text-align:center;margin-top:12px">
+      <span id="disp-no-call-msg" style="display:none;color:var(--text-muted);font-size:.72rem">No call log found — </span>
+      <a href="#" id="btn-skip-wrapup" style="display:none;font-size:.72rem;color:var(--text-muted);text-decoration:underline" onclick="skipWrapup(event)">Skip &amp; go Ready</a>
+    </p>
+    <p id="disp-required-msg" style="text-align:center;color:var(--text-muted);font-size:.7rem;margin-top:4px">This dialog cannot be dismissed until a disposition is selected.</p>
   </div>
 </div>
 
@@ -456,7 +460,7 @@ body { overflow-x: hidden; }
 
   let ua=null,session=null,dialNum='',callSec=0,callTimer=null;
   let muted=false,held=false,autoAns=true;
-  let callId=null,inWrapup=false,selDispId=null;
+  let callId=null,inWrapup=false,selDispId=null,restoreToReady=false;
   let wsConn=null,wsDelay=1000;
   let statusSince=new Date('{{ agent_status.status_changed_at.isoformat }}');
   let loginSince=new Date();
@@ -509,7 +513,21 @@ body { overflow-x: hidden; }
     if(d.stats_today)updateStats(d.stats_today);
     if(d.status==='wrapup'){
       callId=String(d.pending_call_log_id||d.pending_call?.id||callId||'');
-      if(callId)enterWrapup(d.pending_call||null);
+      // Always enter wrapup if server says we're in wrapup — even if callId is
+      // empty (stranded wrapup).  The enterWrapup function shows a "Skip" link
+      // in that case so the agent isn't permanently blocked.
+      enterWrapup(d.pending_call||null);
+    }
+    // Bug 7 fix: server temporarily set agent offline to wait for SIP re-registration
+    if(d.restore_to==='ready'){
+      if(ua?.isRegistered()){
+        // SIP already registered (brief WS hiccup case) — restore immediately
+        wsSend({action:'set_status',status:'ready'});
+        restoreToReady=false;
+      } else {
+        // Page reload case — wait for JsSIP registered event
+        restoreToReady=true;
+      }
     }
     document.querySelectorAll('[data-set-status]').forEach(b=>b.disabled=false);
     loadHistory();
@@ -525,12 +543,22 @@ body { overflow-x: hidden; }
   }
 
   function onIncoming(d){
-    callId=d.call_id; showCall(d.lead||{},'ringing');
+    callId=d.call_id;
+    applyStatus({status:'on_call',display:'Ringing',since:new Date().toISOString()});
+    showCall(d.lead||{},'ringing');
     renderLead(d.lead||{});
     if(d.campaign)$('call-meta-camp').textContent=d.campaign.name||'--';
-    if(autoAns&&session)setTimeout(()=>answerSession(),700);
+    // Fallback: if SIP INVITE already arrived before this WS event, answer now.
+    // If not yet arrived, handleSession will auto-answer when INVITE comes in.
+    if(autoAns&&session) setTimeout(()=>answerSession(),300);
   }
-  function onConnected(d){callId=d.call_id;showCall(d.lead||{},'connected');startCallTimer();renderLead(d.lead||{});}
+  function onConnected(d){
+    callId=d.call_id;
+    applyStatus({status:'on_call',display:'On Call',since:new Date().toISOString()});
+    showCall(d.lead||{},'connected');
+    startCallTimer();
+    renderLead(d.lead||{});
+  }
   function onEnded(d){stopCallTimer();callId=String(d.call_log_id||d.call_id||callId||'');if(d.needs_disposition&&callId)enterWrapup(null);else resetCall();}
 
   function showCall(lead,state){
@@ -568,11 +596,29 @@ body { overflow-x: hidden; }
     if(ci){const n=ci.lead_name||ci.first_name||'--';$('disp-subtitle').textContent='Call with '+n+' · '+fmt(ci.duration||0);}
     else {$('disp-subtitle').textContent='Select a disposition to complete this call.';}
     const notesEl=$('call-notes');if(notesEl)$('disp-notes').value=notesEl.value;
+    // Preserve callId — resetCall() clears it, but we need it for the disposition save
+    const savedCallId=callId;
     resetCall();
+    callId=savedCallId;
+    // Show skip link if there's no call id (stranded wrapup)
+    const hasCallId=!!(callId&&parseInt(callId,10)>0);
+    const skipLink=$('btn-skip-wrapup');
+    const noCallMsg=$('disp-no-call-msg');
+    const reqMsg=$('disp-required-msg');
+    if(skipLink){skipLink.style.display=hasCallId?'none':'inline';}
+    if(noCallMsg){noCallMsg.style.display=hasCallId?'none':'inline';}
+    if(reqMsg){reqMsg.style.display=hasCallId?'':'none';}
     dispOverlay.classList.add('visible');
     wrapupBar.classList.add('visible');
   }
   function closeWrapup(){inWrapup=false;dispOverlay.classList.remove('visible');wrapupBar.classList.remove('visible');}
+  window.skipWrapup=function(e){
+    e.preventDefault();
+    if(!inWrapup)return;
+    closeWrapup();
+    wsSend({action:'set_status',status:'ready'});
+    toast('Wrapup skipped — going Ready','info');
+  };
   window.openDisposition=function(){dispOverlay.classList.add('visible');};
 
   function renderDispositions(disps){
@@ -645,12 +691,44 @@ body { overflow-x: hidden; }
     try{
       const sock=new JsSIP.WebSocketInterface(CFG.ws);
       ua=new JsSIP.UA({sockets:[sock],uri:CFG.uri,password:CFG.pw,display_name:CFG.name,register:true,session_timers:false});
-      ua.on('registered',()=>{setRTC('registered','Registered');if(dialNum)btnCall.disabled=false;});
-      ua.on('unregistered',()=>setRTC('failed','Unregistered'));
-      ua.on('registrationFailed',ev=>setRTC('failed','Failed: '+(ev.cause||'')));
+      ua.on('registered',()=>{
+        setRTC('registered','Registered');
+        if(dialNum)btnCall.disabled=false;
+        if(restoreToReady){restoreToReady=false;wsSend({action:'set_status',status:'ready'});toast('SIP registered — going Ready','info');}
+      });
+      ua.on('unregistered',()=>{
+        setRTC('failed','Unregistered');
+        // Keep dialer from reserving an unregistered agent
+        _sipWentOffline('SIP unregistered');
+      });
+      ua.on('registrationFailed',ev=>{
+        const cause=ev?.cause||'unknown';
+        setRTC('failed','Failed: '+cause);
+        toast('SIP registration failed: '+cause,'danger');
+        _sipWentOffline('SIP registration failed: '+cause);
+      });
+      ua.on('disconnected',()=>{
+        setRTC('failed','Disconnected');
+        _sipWentOffline('SIP disconnected');
+      });
       ua.on('newRTCSession',ev=>handleSession(ev.session));
       ua.start();setRTC('connecting','Connecting...');
     }catch(e){setRTC('failed','Error: '+e.message);}
+  }
+
+  // Called whenever JsSIP loses its Asterisk connection mid-session.
+  // Sets agent offline in Django so the dialer doesn't reserve a dead endpoint,
+  // and arms restoreToReady so the registered handler brings them back to ready.
+  function _sipWentOffline(reason){
+    console.warn('JsSIP offline:', reason);
+    if(restoreToReady) return;  // already parked
+    const pill=$('status-pill');
+    const wasActive=pill?.classList.contains('ready')||pill?.classList.contains('on_call');
+    if(wasActive){
+      restoreToReady=true;
+      wsSend({action:'set_status',status:'offline'});
+      toast('Phone disconnected — going Offline','warning');
+    }
   }
 
   function setRTC(state,text){
@@ -660,22 +738,71 @@ body { overflow-x: hidden; }
   }
 
   function handleSession(s){
-    if(session){s.terminate({status_code:486});return;}
+    if(session){
+      console.warn('SIP: rejecting second INVITE (already in session)');
+      s.terminate({status_code:486});
+      return;
+    }
+    console.log('SIP: new session dir='+s.direction);
     session=s;
-    s.on('peerconnection',pc=>{pc.peerconnection.addEventListener('track',ev=>{if(ev.streams?.[0])remAudio.srcObject=ev.streams[0];});});
-    s.on('progress',()=>{const dir=s.direction;$('phone-status-disp').textContent=dir==='incoming'?'INCOMING...':'RINGING...';});
-    s.on('accepted',()=>{$('phone-status-disp').textContent='CONNECTED';btnCall.disabled=true;btnHang.disabled=false;});
-    s.on('ended',()=>{session=null;$('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'ENDED';});
-    s.on('failed',()=>{session=null;$('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'FAILED';});
-    
-    // Auto-answer logic for incoming calls
-    if (s.direction === 'incoming') {
-      $('phone-status-disp').textContent = autoAns ? 'AUTO-ANSWERING...' : 'INCOMING...';
-      if (autoAns) setTimeout(answerSession, 700);
+
+    s.on('peerconnection',pc=>{
+      console.log('SIP: peerconnection created');
+      pc.peerconnection.addEventListener('track',ev=>{
+        console.log('SIP: remote track received, streams='+ev.streams?.length);
+        if(ev.streams?.[0])remAudio.srcObject=ev.streams[0];
+      });
+    });
+    s.on('progress',()=>{
+      const dir=s.direction;
+      console.log('SIP: progress dir='+dir);
+      $('phone-status-disp').textContent=dir==='incoming'?'INCOMING...':'RINGING...';
+    });
+    s.on('accepted',()=>{
+      console.log('SIP: accepted / connected');
+      $('phone-status-disp').textContent='CONNECTED';
+      btnCall.disabled=true;btnHang.disabled=false;
+    });
+    s.on('ended',ev=>{
+      console.log('SIP: ended cause='+(ev?.cause||'bye'));
+      session=null;
+      $('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'ENDED';
+    });
+    s.on('failed',ev=>{
+      const cause=ev?.cause||'unknown';
+      const orig=ev?.originator||'';
+      console.error('SIP: session FAILED cause='+cause+' originator='+orig, ev);
+      session=null;
+      $('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'FAILED';
+      // Don't toast for normal local hangup or timeout-after-answer
+      if(cause!=='Terminated'&&cause!=='BYE'){
+        toast('SIP call failed ['+cause+']','danger');
+      }
+    });
+
+    // Auto-answer incoming calls
+    if(s.direction==='incoming'){
+      console.log('SIP: incoming — autoAns='+autoAns);
+      $('phone-status-disp').textContent=autoAns?'AUTO-ANSWERING...':'INCOMING...';
+      if(autoAns) setTimeout(answerSession,700);
     }
   }
 
-  function answerSession(){if(!session)return;session.answer({mediaConstraints:{audio:true,video:false},pcConfig:{iceServers:ICE}});}
+  function answerSession(){
+    if(!session){console.warn('answerSession: no session');return;}
+    console.log('SIP: calling session.answer()');
+    try{
+      session.answer({
+        mediaConstraints:{audio:true,video:false},
+        rtcOfferConstraints:{offerToReceiveAudio:true,offerToReceiveVideo:false},
+        pcConfig:{iceServers:ICE},
+      });
+    }catch(e){
+      console.error('SIP: session.answer() threw synchronously:',e);
+      toast('SIP answer error: '+e.message,'danger');
+      session=null;
+    }
+  }
   function makeCall(){if(!ua?.isRegistered()||!dialNum)return;session=ua.call('sip:'+dialNum+'@'+CFG.domain,{mediaConstraints:{audio:true,video:false},pcConfig:{iceServers:ICE}});}
   function hangupCall(){if(session){session.terminate();session=null;}wsSend({action:'hangup',channel_id:null});}
   function toggleMute(){muted=!muted;session?.connection?.getSenders()?.forEach(s=>{if(s.track?.kind==='audio')s.track.enabled=!muted;});btnMute?.classList.toggle('active',muted);toast(muted?'Muted':'Unmuted','info');}
@@ -726,6 +853,13 @@ body { overflow-x: hidden; }
 
   /* ── Logout ── */
   $('logout-btn')?.addEventListener('click',e=>{if(inWrapup){e.preventDefault();openDisposition();$('logout-banner').classList.add('visible');setTimeout(()=>$('logout-banner').classList.remove('visible'),3000);}});
+
+  /* ── Prevent accidental page refresh/close during active call or wrapup ── */
+  window.addEventListener('beforeunload',e=>{
+    const pill=$('status-pill');
+    const st=pill?.classList.contains('on_call')||inWrapup;
+    if(st){e.preventDefault();e.returnValue='You have an active call or pending disposition. Leaving will disconnect the call.';return e.returnValue;}
+  });
 
   /* ── Keyboard ── */
   document.addEventListener('keydown',e=>{

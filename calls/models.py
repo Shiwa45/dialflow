@@ -77,7 +77,16 @@ class CallLog(TimestampedModel):
     agent_notes    = models.TextField(blank=True)
     recording_path = models.CharField(max_length=500, blank=True)
 
-    # ── AMD result ────────────────────────────────────────────────────────────
+    # ── Abandon flag ─────────────────────────────────────────────────���───────
+    # True when the customer answered but no agent was available (status=dropped).
+    # Set automatically by calls.signals and indexed for fast abandon-rate queries.
+    is_abandoned = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Customer answered but no agent was bridged (dropped call).",
+    )
+
+    # ── AMD result ─────────────────────────────��──────────────────────────────
     amd_result = models.CharField(max_length=50, blank=True)
 
     class Meta:
@@ -96,7 +105,11 @@ class CallLog(TimestampedModel):
 
     @property
     def duration_display(self):
-        m, s = divmod(self.duration or 0, 60)
+        total = self.duration or 0
+        h, remainder = divmod(total, 3600)
+        m, s = divmod(remainder, 60)
+        if h:
+            return f'{h}:{m:02d}:{s:02d}'
         return f'{m}:{s:02d}'
 
     @property

@@ -349,6 +349,85 @@ def supervisor_monitor(request):
     return JsonResponse({'agents': data})
 
 
+# ── Dispose API ───────────────────────────────────────────────────────────────
+
+@login_required
+@agent_required
+@require_POST
+def submit_disposition(request):
+    """
+    Submit a disposition for a completed call and return agent to ready state.
+    Expected POST fields: disposition_id, call_log_id, notes (optional), callback_at (optional).
+    """
+    from calls.models import CallLog
+    from campaigns.models import Disposition
+
+    try:
+        disposition_id = int(request.POST['disposition_id'])
+        call_log_id    = int(request.POST['call_log_id'])
+    except (KeyError, ValueError, TypeError):
+        return JsonResponse({'error': 'disposition_id and call_log_id are required integers'}, status=400)
+
+    try:
+        call_log = CallLog.objects.select_related('campaign', 'lead').get(
+            pk=call_log_id, agent=request.user
+        )
+    except CallLog.DoesNotExist:
+        return JsonResponse({'error': 'Call log not found'}, status=404)
+
+    try:
+        disposition = Disposition.objects.get(pk=disposition_id)
+    except Disposition.DoesNotExist:
+        return JsonResponse({'error': 'Disposition not found'}, status=404)
+
+    notes       = (request.POST.get('notes') or '').strip()
+    callback_at = request.POST.get('callback_at') or None
+
+    # Update the CallLog FK
+    call_log.disposition = disposition
+    update_fields = ['disposition']
+    if notes:
+        call_log.agent_notes = notes
+        update_fields.append('agent_notes')
+    call_log.save(update_fields=update_fields)
+
+    # Create CallDisposition record
+    CallDisposition.objects.update_or_create(
+        call_log=call_log,
+        defaults={
+            'agent':       request.user,
+            'campaign':    call_log.campaign,
+            'lead':        call_log.lead,
+            'disposition': disposition,
+            'notes':       notes,
+            'callback_at': callback_at,
+        },
+    )
+
+    # Handle DNC outcome
+    if disposition.outcome == 'dnc' and call_log.lead:
+        call_log.lead.mark_dnc(reason=f'Agent disposition: {disposition.name}')
+
+    # Move agent from wrapup → ready
+    status_obj, _ = AgentStatus.objects.get_or_create(user=request.user)
+    if status_obj.status == 'wrapup':
+        status_obj.go_ready()
+
+    # Push dispose_ok event via WebSocket so other tabs know
+    try:
+        from core.ws_utils import send_to_agent
+        send_to_agent(request.user.id, {'type': 'dispose_ok', 'call_log_id': call_log_id})
+    except Exception:
+        pass
+
+    return JsonResponse({
+        'success':         True,
+        'disposition':     disposition.name,
+        'outcome':         disposition.outcome,
+        'agent_status':    status_obj.status,
+    })
+
+
 # ── Pause codes API ──────────────────────────────────────────────────────────
 
 @login_required

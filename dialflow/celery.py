@@ -47,6 +47,18 @@ app.conf.beat_schedule = {
         'schedule': 120.0,
     },
 
+    # ── AI: feed outcomes back into XGBoost models (feedback loop) ───────────
+    'ai-record-outcomes': {
+        'task': 'campaigns.tasks.record_dialer_outcomes',
+        'schedule': 30.0,   # every 30 s — matches the observation window
+    },
+
+    # ── AI: health monitor + stale dialer cleanup ─────────────────────────────
+    'ai-dialer-health': {
+        'task': 'campaigns.tasks.ai_dialer_health_report',
+        'schedule': 300.0,  # every 5 min
+    },
+
     # ── Daily: recycle failed calls ───────────────────────────────────────────
     'recycle-failed-calls': {
         'task': 'campaigns.tasks.recycle_failed_calls',
