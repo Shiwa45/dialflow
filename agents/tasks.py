@@ -13,6 +13,7 @@ cleanup_zombie_agents  — runs every 60 seconds
   are marked offline. This handles browser crashes / network drops.
 """
 import logging
+import requests
 from celery import shared_task
 from django.utils import timezone
 from django.conf import settings
@@ -170,6 +171,95 @@ def cleanup_zombie_agents():
         logger.info('Zombie cleanup complete: %d agent(s) set offline', cleaned)
 
     return {'cleaned': cleaned}
+
+
+@shared_task(name='agents.tasks.cleanup_stale_live_calls', max_retries=0)
+def cleanup_stale_live_calls():
+    """
+    Recover agents stuck in ringing/on_call when their active ARI channel
+    no longer exists (missed ARI ChannelDestroyed, worker restarts, races).
+    Runs frequently via Celery beat.
+    """
+    from agents.models import AgentStatus
+    from core.ws_utils import send_to_agent, broadcast_supervisor
+
+    cfg = settings.ASTERISK
+    url = f"http://{cfg['ARI_HOST']}:{cfg['ARI_PORT']}/ari/channels"
+
+    try:
+        r = requests.get(
+            url,
+            auth=(cfg['ARI_USERNAME'], cfg['ARI_PASSWORD']),
+            timeout=4,
+        )
+        r.raise_for_status()
+        live_ids = {
+            ch.get('id') for ch in (r.json() or [])
+            if isinstance(ch, dict) and ch.get('id')
+        }
+    except Exception as e:
+        logger.warning('Stale live-call cleanup skipped: ARI unavailable (%s)', e)
+        return {'recovered': 0, 'reason': 'ari_unavailable'}
+
+    recovered = 0
+    now = timezone.now()
+
+    stuck = AgentStatus.objects.filter(
+        status__in=['ringing', 'on_call']
+    ).select_related('user')
+
+    for st in stuck:
+        if st.active_channel_id and st.active_channel_id in live_ids:
+            continue
+
+        logger.warning(
+            'Recovering stale %s state: agent=%s channel=%s',
+            st.status, st.user.username, st.active_channel_id,
+        )
+
+        if st.active_call_log_id:
+            # Preserve disposition path when we have a call log.
+            st.status = 'wrapup'
+            st.status_changed_at = now
+            st.wrapup_started_at = now
+            st.wrapup_call_log_id = st.active_call_log_id
+            st.active_channel_id = None
+            st.active_lead_id = None
+            st.call_started_at = None
+            st.save(update_fields=[
+                'status',
+                'status_changed_at',
+                'wrapup_started_at',
+                'wrapup_call_log_id',
+                'active_channel_id',
+                'active_lead_id',
+                'call_started_at',
+                'updated_at',
+            ])
+            send_to_agent(st.user_id, {
+                'type': 'status_changed',
+                'status': 'wrapup',
+                'display': 'Wrap-up',
+                'since': now.isoformat(),
+                'call_log_id': st.active_call_log_id,
+                'active_channel_id': None,
+                'active_lead_id': None,
+            })
+            broadcast_supervisor({
+                'type': 'agent_status_changed',
+                'agent_id': st.user_id,
+                'status': 'wrapup',
+                'since': now.isoformat(),
+                'reason': 'stale_call_recovery',
+            })
+        else:
+            st.go_ready()
+
+        recovered += 1
+
+    if recovered:
+        logger.info('Stale live-call cleanup recovered %d agent(s)', recovered)
+    return {'recovered': recovered}
 
 
 @shared_task(name='agents.tasks.reset_daily_stats', max_retries=0)

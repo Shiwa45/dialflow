@@ -1,17 +1,17 @@
-{% load static %}
+﻿{% load static %}
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agent Dashboard — DialFlow Pro</title>
+<title>Agent Dashboard â€” DialFlow Pro</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{% static 'css/theme.css' %}">
 <style>
 body { overflow-x: hidden; }
 
-/* ── 3-column agent layout ── */
+/* â”€â”€ 3-column agent layout â”€â”€ */
 .agent-layout {
   display: grid;
   grid-template-columns: 320px 1fr 360px;
@@ -219,7 +219,7 @@ body { overflow-x: hidden; }
 
 <div id="wrapup-bar">
   <i class="fas fa-clipboard-check"></i>
-  <span>Wrap-up Required — Dispose the call before continuing.</span>
+  <span>Wrap-up Required â€” Dispose the call before continuing.</span>
   <button class="wrapup-dispose-btn" onclick="openDisposition()">
     <i class="fas fa-tag"></i> Dispose Now
   </button>
@@ -439,7 +439,7 @@ body { overflow-x: hidden; }
     </div>
     <button class="disp-save-btn" id="btn-save-disp" disabled><i class="fas fa-save"></i> Save Disposition</button>
     <p style="text-align:center;margin-top:12px">
-      <span id="disp-no-call-msg" style="display:none;color:var(--text-muted);font-size:.72rem">No call log found — </span>
+      <span id="disp-no-call-msg" style="display:none;color:var(--text-muted);font-size:.72rem">No call log found â€” </span>
       <a href="#" id="btn-skip-wrapup" style="display:none;font-size:.72rem;color:var(--text-muted);text-decoration:underline" onclick="skipWrapup(event)">Skip &amp; go Ready</a>
     </p>
     <p id="disp-required-msg" style="text-align:center;color:var(--text-muted);font-size:.7rem;margin-top:4px">This dialog cannot be dismissed until a disposition is selected.</p>
@@ -450,436 +450,20 @@ body { overflow-x: hidden; }
 <audio id="remote-audio" autoplay playsinline></audio>
 
 <script src="{% static 'js/jssip.min.js' %}"></script>
-<script src="{% static 'js/app.js' %}"></script>
 <script>
-(function(){
-  'use strict';
-  const CSRF = '{{ csrf_token }}';
-  const CFG  = { ws:'{{ webrtc_config.ws_url|escapejs }}', uri:'{{ webrtc_config.sip_uri|escapejs }}', pw:'{{ webrtc_config.password|escapejs }}', domain:'{{ webrtc_config.domain|escapejs }}', name:'{{ webrtc_config.display_name|escapejs }}' };
-  const ICE  = [{ urls: '{{ webrtc_config.stun|default:"stun:stun.l.google.com:19302" }}' }];
-
-  let ua=null,session=null,dialNum='',callSec=0,callTimer=null;
-  let muted=false,held=false,autoAns=true;
-  let callId=null,inWrapup=false,selDispId=null,restoreToReady=false;
-  let wsConn=null,wsDelay=1000;
-  let statusSince=new Date('{{ agent_status.status_changed_at.isoformat }}');
-  let loginSince=new Date();
-  let tickId=null;
-
-  const $=id=>document.getElementById(id);
-  const btnCall=$('btn-call'),btnHang=$('btn-hangup'),btnMute=$('btn-mute'),btnHold=$('btn-hold'),btnXfer=$('btn-transfer'),btnClear=$('btn-clear');
-  const wDot=$('webrtc-dot'),wText=$('webrtc-status-text');
-  const remAudio=$('remote-audio');
-  const callBadge=$('call-badge');
-  const dispOverlay=$('disposition-overlay');
-  const wrapupBar=$('wrapup-bar');
-
-  function toast(msg,type='info'){
-    const el=$('toast'); el.textContent=msg; el.className='show '+type;
-    clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),3500);
-  }
-
-  function post(url,data={}){
-    return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},body:JSON.stringify(data)}).then(r=>r.json()).catch(()=>({}));
-  }
-
-  /* ── WebSocket ── */
-  function connectWS(){
-    const proto=location.protocol==='https:'?'wss:':'ws:';
-    wsConn=new WebSocket(`${proto}//${location.host}/ws/agent/`);
-    wsConn.onopen=()=>{$('ws-status-text').textContent='Connected';$('ws-status-text').style.color='var(--success)';wsDelay=1000;};
-    wsConn.onmessage=e=>{try{handle(JSON.parse(e.data));}catch(_){}};
-    wsConn.onclose=()=>{$('ws-status-text').textContent='Disconnected';$('ws-status-text').style.color='var(--danger)';setTimeout(connectWS,wsDelay);wsDelay=Math.min(wsDelay*1.5,30000);};
-  }
-  function wsSend(d){if(wsConn?.readyState===1)wsConn.send(JSON.stringify(d));}
-
-  function handle(d){
-    const t=d.type;
-    if(t==='snapshot')       applySnapshot(d);
-    else if(t==='status_changed'||t==='status_change')  applyStatus(d);
-    else if(t==='call_incoming')   onIncoming(d);
-    else if(t==='call_connected')  onConnected(d);
-    else if(t==='call_ended')      onEnded(d);
-    else if(t==='wrapup_timeout_warning') toast('Auto-wrapup in '+d.seconds_remaining+'s','warning');
-    else if(t==='wrapup_expired')  {toast('Auto-wrapup: '+d.disposition_applied,'info');closeWrapup();}
-    else if(t==='dispose_ok')      {closeWrapup();toast('Disposition saved','success');}
-    else if(t==='error')           {toast(d.message||'Action failed','danger');if(inWrapup&&selDispId){$('btn-save-disp').disabled=false;}}
-    else if(t==='force_logout')    {toast(d.reason||'Logged out by supervisor','warning');setTimeout(()=>{location.href='/auth/logout/';},2500);}
-  }
-
-  function applySnapshot(d){
-    applyStatus({status:d.status,display:d.status_display,since:d.status_since});
-    if(d.dispositions?.length)renderDispositions(d.dispositions);
-    if(d.stats_today)updateStats(d.stats_today);
-    if(d.status==='wrapup'){
-      callId=String(d.pending_call_log_id||d.pending_call?.id||callId||'');
-      // Always enter wrapup if server says we're in wrapup — even if callId is
-      // empty (stranded wrapup).  The enterWrapup function shows a "Skip" link
-      // in that case so the agent isn't permanently blocked.
-      enterWrapup(d.pending_call||null);
-    }
-    // Bug 7 fix: server temporarily set agent offline to wait for SIP re-registration
-    if(d.restore_to==='ready'){
-      if(ua?.isRegistered()){
-        // SIP already registered (brief WS hiccup case) — restore immediately
-        wsSend({action:'set_status',status:'ready'});
-        restoreToReady=false;
-      } else {
-        // Page reload case — wait for JsSIP registered event
-        restoreToReady=true;
-      }
-    }
-    document.querySelectorAll('[data-set-status]').forEach(b=>b.disabled=false);
-    loadHistory();
-  }
-
-  function applyStatus(d){
-    const st=d.status||'offline';
-    statusSince=d.since?new Date(d.since):new Date();
-    const pill=$('status-pill');
-    if(pill){pill.textContent=d.display||tc(st);pill.className='status-pill '+st;}
-    document.querySelectorAll('[data-set-status]').forEach(b=>b.classList.toggle('is-active',b.dataset.setStatus===st));
-    $('status-since-text').textContent=d.display||tc(st);
-  }
-
-  function onIncoming(d){
-    callId=d.call_id;
-    applyStatus({status:'on_call',display:'Ringing',since:new Date().toISOString()});
-    showCall(d.lead||{},'ringing');
-    renderLead(d.lead||{});
-    if(d.campaign)$('call-meta-camp').textContent=d.campaign.name||'--';
-    // Fallback: if SIP INVITE already arrived before this WS event, answer now.
-    // If not yet arrived, handleSession will auto-answer when INVITE comes in.
-    if(autoAns&&session) setTimeout(()=>answerSession(),300);
-  }
-  function onConnected(d){
-    callId=d.call_id;
-    applyStatus({status:'on_call',display:'On Call',since:new Date().toISOString()});
-    showCall(d.lead||{},'connected');
-    startCallTimer();
-    renderLead(d.lead||{});
-  }
-  function onEnded(d){stopCallTimer();callId=String(d.call_log_id||d.call_id||callId||'');if(d.needs_disposition&&callId)enterWrapup(null);else resetCall();}
-
-  function showCall(lead,state){
-    $('call-placeholder').style.display='none';
-    $('call-details').classList.add('visible');
-    const n=[lead.first_name,lead.last_name].filter(Boolean).join(' ')||lead.phone||'--';
-    $('call-lead-name').textContent=n;
-    $('call-lead-sub').textContent=lead.phone||'--';
-    $('call-meta-phone').textContent=lead.phone||'--';
-    $('call-meta-status').textContent=tc(state);
-    callBadge.className='call-badge '+state;
-    callBadge.innerHTML='<i class="fas fa-circle"></i> '+tc(state);
-    [btnHang,btnMute,btnHold,btnXfer].forEach(b=>{if(b)b.disabled=false;});
-  }
-
-  function resetCall(){
-    stopCallTimer();
-    $('call-placeholder').style.display='';
-    $('call-details').classList.remove('visible');
-    callBadge.className='call-badge idle';
-    callBadge.innerHTML='<i class="fas fa-circle"></i> Idle';
-    [btnHang,btnMute,btnHold,btnXfer].forEach(b=>{if(b)b.disabled=true;});
-    callId=null;muted=false;held=false;
-    $('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'DISCONNECTED';
-    $('phone-timer').style.display='none';
-    $('phone-num-disp').textContent='';
-  }
-
-  function startCallTimer(){stopCallTimer();callSec=0;$('phone-timer').style.display='';$('phone-status-disp').textContent='CONNECTED';callTimer=setInterval(()=>{callSec++;const t=fmt(callSec);$('phone-timer').textContent=t;$('call-meta-dur').textContent=t;},1000);}
-  function stopCallTimer(){clearInterval(callTimer);callTimer=null;}
-
-  function enterWrapup(ci){
-    inWrapup=true;selDispId=null;$('btn-save-disp').disabled=true;
-    applyStatus({status:'wrapup',display:'Wrap-up',since:new Date().toISOString()});
-    if(ci){const n=ci.lead_name||ci.first_name||'--';$('disp-subtitle').textContent='Call with '+n+' · '+fmt(ci.duration||0);}
-    else {$('disp-subtitle').textContent='Select a disposition to complete this call.';}
-    const notesEl=$('call-notes');if(notesEl)$('disp-notes').value=notesEl.value;
-    // Preserve callId — resetCall() clears it, but we need it for the disposition save
-    const savedCallId=callId;
-    resetCall();
-    callId=savedCallId;
-    // Show skip link if there's no call id (stranded wrapup)
-    const hasCallId=!!(callId&&parseInt(callId,10)>0);
-    const skipLink=$('btn-skip-wrapup');
-    const noCallMsg=$('disp-no-call-msg');
-    const reqMsg=$('disp-required-msg');
-    if(skipLink){skipLink.style.display=hasCallId?'none':'inline';}
-    if(noCallMsg){noCallMsg.style.display=hasCallId?'none':'inline';}
-    if(reqMsg){reqMsg.style.display=hasCallId?'':'none';}
-    dispOverlay.classList.add('visible');
-    wrapupBar.classList.add('visible');
-  }
-  function closeWrapup(){inWrapup=false;dispOverlay.classList.remove('visible');wrapupBar.classList.remove('visible');}
-  window.skipWrapup=function(e){
-    e.preventDefault();
-    if(!inWrapup)return;
-    closeWrapup();
-    wsSend({action:'set_status',status:'ready'});
-    toast('Wrapup skipped — going Ready','info');
+  // Inject server config for agent.js (DB-driven, no virtual state)
+  window.AGENT_CFG = {
+    csrf:  '{{ csrf_token }}',
+    ws:    '{{ webrtc_config.ws_url|escapejs }}',
+    uri:   '{{ webrtc_config.sip_uri|escapejs }}',
+    pw:    '{{ webrtc_config.password|escapejs }}',
+    domain:'{{ webrtc_config.domain|escapejs }}',
+    name:  '{{ webrtc_config.display_name|escapejs }}',
+    stun:  '{{ webrtc_config.stun|default:"stun:stun.l.google.com:19302" }}',
+    disable_stun: {{ webrtc_config.disable_stun|yesno:"true,false" }},
   };
-  window.openDisposition=function(){dispOverlay.classList.add('visible');};
-
-  function renderDispositions(disps){
-    const g=$('disp-grid');if(!g)return;
-    g.innerHTML=disps.map(d=>`<button class="disp-btn" data-disp-id="${d.id}" onclick="selectDisp(${d.id},'${(d.name||'').replace(/'/g,"\'")}','${d.outcome||''}',this)"><span class="disp-color" style="background:${d.color}"></span>${d.name}${d.hotkey?`<span class="disp-hotkey">${d.hotkey.toUpperCase()}</span>`:''}</button>`).join('');
-  }
-
-  window.selectDisp=function(id,name,outcome,btn){
-    selDispId=id;
-    document.querySelectorAll('.disp-btn').forEach(b=>b.classList.remove('selected'));
-    btn.classList.add('selected');
-    $('btn-save-disp').disabled=false;
-    $('callback-dt-row').style.display=outcome==='callback'?'':'none';
-  };
-
-  $('btn-save-disp').onclick=function(){
-    if(!selDispId||!callId)return;
-    const cid=parseInt(callId,10);
-    if(!Number.isFinite(cid)||cid<=0){toast('Missing call log id for disposition','danger');return;}
-    this.disabled=true;
-    wsSend({action:'dispose',disposition_id:parseInt(selDispId,10),call_log_id:cid,notes:$('disp-notes').value.trim(),callback_at:$('callback-at').value||null});
-  };
-
-  document.addEventListener('keydown',e=>{
-    if(!inWrapup)return;
-    if(e.target.tagName==='TEXTAREA'||e.target.tagName==='INPUT')return;
-    document.querySelectorAll('.disp-btn').forEach(btn=>{const hk=btn.querySelector('.disp-hotkey')?.textContent;if(hk&&e.key.toUpperCase()===hk)btn.click();});
-    if(e.key==='Enter'&&!$('btn-save-disp').disabled)$('btn-save-disp').click();
-  });
-
-  function renderLead(lead){
-    const g=$('lead-info-grid');if(!g)return;
-    const fields=[['Phone',lead.phone||lead.primary_phone],['Email',lead.email],['Company',lead.company],['City',[lead.city,lead.state].filter(Boolean).join(', ')],['Source',lead.source]].filter(([,v])=>v);
-    g.innerHTML=fields.length?fields.map(([l,v])=>`<div class="lead-info-row"><span class="lead-info-label">${l}</span><span class="lead-info-val">${v}</span></div>`).join(''):'<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:.82rem">No lead details.</div>';
-  }
-
-  function updateStats(s){
-    const tot=s.calls||s.total||0,ans=s.answered||0,talk=s.talk_sec||0,rate=tot>0?Math.round(ans/tot*100):0;
-    ['stat-total','qs-total'].forEach(id=>{const el=$(id);if(el)el.textContent=tot;});
-    ['stat-answered','qs-answered'].forEach(id=>{const el=$(id);if(el)el.textContent=ans;});
-    ['stat-talk','qs-talk'].forEach(id=>{const el=$(id);if(el)el.textContent=fmt(talk);});
-    ['stat-rate','qs-rate'].forEach(id=>{const el=$(id);if(el)el.textContent=rate+'%';});
-  }
-
-  function loadHistory(){
-    fetch('/agents/api/call-history/').then(r=>r.json()).then(d=>{
-      const el=$('recent-calls-list');if(!el)return;
-      if(!d.calls?.length){el.textContent='No recent calls.';return;}
-      el.innerHTML=d.calls.slice(0,10).map(c=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)"><div><div style="font-weight:600;font-size:.82rem">${c.lead_name||c.phone}</div><div style="font-size:.72rem;color:var(--text-muted)">${c.campaign||''}</div></div><div style="text-align:right"><span class="badge badge-${c.status}" style="font-size:.65rem">${c.status}</span><div style="font-size:.7rem;color:var(--text-muted);margin-top:2px">${c.duration?fmt(c.duration):'--'}</div></div></div>`).join('');
-    }).catch(()=>{});
-  }
-
-  /* ── Timers ── */
-  function startTimers(){
-    clearInterval(tickId);
-    tickId=setInterval(()=>{
-      const sec=Math.floor((Date.now()-statusSince.getTime())/1000);
-      const el=$('status-timer');if(el)el.textContent=fmt(sec);
-      const loginSec=Math.floor((Date.now()-loginSince.getTime())/1000);
-      const el2=$('session-timer');if(el2)el2.textContent=fmt(loginSec);
-    },1000);
-  }
-
-  /* ── Heartbeat ── */
-  function startHB(){setInterval(()=>{wsSend({action:'heartbeat'});post('/agents/api/heartbeat/');},25000);}
-
-  /* ── JsSIP ── */
-  function initRTC(){
-    if(!CFG.uri||!CFG.ws){setRTC('failed','No extension');return;}
-    try{
-      const sock=new JsSIP.WebSocketInterface(CFG.ws);
-      ua=new JsSIP.UA({sockets:[sock],uri:CFG.uri,password:CFG.pw,display_name:CFG.name,register:true,session_timers:false});
-      ua.on('registered',()=>{
-        setRTC('registered','Registered');
-        if(dialNum)btnCall.disabled=false;
-        if(restoreToReady){restoreToReady=false;wsSend({action:'set_status',status:'ready'});toast('SIP registered — going Ready','info');}
-      });
-      ua.on('unregistered',()=>{
-        setRTC('failed','Unregistered');
-        // Keep dialer from reserving an unregistered agent
-        _sipWentOffline('SIP unregistered');
-      });
-      ua.on('registrationFailed',ev=>{
-        const cause=ev?.cause||'unknown';
-        setRTC('failed','Failed: '+cause);
-        toast('SIP registration failed: '+cause,'danger');
-        _sipWentOffline('SIP registration failed: '+cause);
-      });
-      ua.on('disconnected',()=>{
-        setRTC('failed','Disconnected');
-        _sipWentOffline('SIP disconnected');
-      });
-      ua.on('newRTCSession',ev=>handleSession(ev.session));
-      ua.start();setRTC('connecting','Connecting...');
-    }catch(e){setRTC('failed','Error: '+e.message);}
-  }
-
-  // Called whenever JsSIP loses its Asterisk connection mid-session.
-  // Sets agent offline in Django so the dialer doesn't reserve a dead endpoint,
-  // and arms restoreToReady so the registered handler brings them back to ready.
-  function _sipWentOffline(reason){
-    console.warn('JsSIP offline:', reason);
-    if(restoreToReady) return;  // already parked
-    const pill=$('status-pill');
-    const wasActive=pill?.classList.contains('ready')||pill?.classList.contains('on_call');
-    if(wasActive){
-      restoreToReady=true;
-      wsSend({action:'set_status',status:'offline'});
-      toast('Phone disconnected — going Offline','warning');
-    }
-  }
-
-  function setRTC(state,text){
-    wDot.className='webrtc-dot '+state;wText.textContent=text;
-    wText.style.color=state==='registered'?'var(--success)':state==='failed'?'var(--danger)':'var(--warning)';
-    const rtcEl=$('rtc-status-text');if(rtcEl){rtcEl.textContent=text;rtcEl.style.color=wText.style.color;}
-  }
-
-  function handleSession(s){
-    if(session){
-      console.warn('SIP: rejecting second INVITE (already in session)');
-      s.terminate({status_code:486});
-      return;
-    }
-    console.log('SIP: new session dir='+s.direction);
-    session=s;
-
-    s.on('peerconnection',pc=>{
-      console.log('SIP: peerconnection created');
-      pc.peerconnection.addEventListener('track',ev=>{
-        console.log('SIP: remote track received, streams='+ev.streams?.length);
-        if(ev.streams?.[0])remAudio.srcObject=ev.streams[0];
-      });
-    });
-    s.on('progress',()=>{
-      const dir=s.direction;
-      console.log('SIP: progress dir='+dir);
-      $('phone-status-disp').textContent=dir==='incoming'?'INCOMING...':'RINGING...';
-    });
-    s.on('accepted',()=>{
-      console.log('SIP: accepted / connected');
-      $('phone-status-disp').textContent='CONNECTED';
-      btnCall.disabled=true;btnHang.disabled=false;
-    });
-    s.on('ended',ev=>{
-      console.log('SIP: ended cause='+(ev?.cause||'bye'));
-      session=null;
-      $('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'ENDED';
-    });
-    s.on('failed',ev=>{
-      const cause=ev?.cause||'unknown';
-      const orig=ev?.originator||'';
-      console.error('SIP: session FAILED cause='+cause+' originator='+orig, ev);
-      session=null;
-      $('phone-status-disp').textContent=ua?.isRegistered()?'REGISTERED':'FAILED';
-      // Don't toast for normal local hangup or timeout-after-answer
-      if(cause!=='Terminated'&&cause!=='BYE'){
-        toast('SIP call failed ['+cause+']','danger');
-      }
-    });
-
-    // Auto-answer incoming calls
-    if(s.direction==='incoming'){
-      console.log('SIP: incoming — autoAns='+autoAns);
-      $('phone-status-disp').textContent=autoAns?'AUTO-ANSWERING...':'INCOMING...';
-      if(autoAns) setTimeout(answerSession,700);
-    }
-  }
-
-  function answerSession(){
-    if(!session){console.warn('answerSession: no session');return;}
-    console.log('SIP: calling session.answer()');
-    try{
-      session.answer({
-        mediaConstraints:{audio:true,video:false},
-        rtcOfferConstraints:{offerToReceiveAudio:true,offerToReceiveVideo:false},
-        pcConfig:{iceServers:ICE},
-      });
-    }catch(e){
-      console.error('SIP: session.answer() threw synchronously:',e);
-      toast('SIP answer error: '+e.message,'danger');
-      session=null;
-    }
-  }
-  function makeCall(){if(!ua?.isRegistered()||!dialNum)return;session=ua.call('sip:'+dialNum+'@'+CFG.domain,{mediaConstraints:{audio:true,video:false},pcConfig:{iceServers:ICE}});}
-  function hangupCall(){if(session){session.terminate();session=null;}wsSend({action:'hangup',channel_id:null});}
-  function toggleMute(){muted=!muted;session?.connection?.getSenders()?.forEach(s=>{if(s.track?.kind==='audio')s.track.enabled=!muted;});btnMute?.classList.toggle('active',muted);toast(muted?'Muted':'Unmuted','info');}
-  function toggleHold(){held=!held;held?session?.hold():session?.unhold();btnHold?.classList.toggle('active',held);toast(held?'On Hold':'Resumed','info');}
-  function updNum(){$('phone-num-disp').textContent=dialNum;if(btnCall)btnCall.disabled=!dialNum||!ua?.isRegistered();}
-  window.saveNotes=function(){toast('Notes saved locally','success');};
-
-  /* ── Theme ── */
-  const html=document.documentElement;
-  const applyTheme=t=>{html.setAttribute('data-theme',t);localStorage.setItem('df_theme',t);$('theme-icon').className=t==='dark'?'fas fa-moon':'fas fa-sun';};
-  applyTheme(localStorage.getItem('df_theme')||'dark');
-  $('theme-toggle').onclick=()=>applyTheme(html.getAttribute('data-theme')==='dark'?'light':'dark');
-
-  /* ── Tabs ── */
-  document.querySelectorAll('.tab-btn').forEach(b=>{
-    b.onclick=function(){
-      document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));
-      document.querySelectorAll('.tab-pane').forEach(x=>x.classList.remove('active'));
-      this.classList.add('active');
-      const p=$('tab-'+this.dataset.tab);if(p)p.classList.add('active');
-      if(this.dataset.tab==='history')loadHistory();
-    };
-  });
-
-  /* ── Keypad ── */
-  document.querySelectorAll('.phone-key').forEach(k=>{k.onclick=function(){const d=this.dataset.digit;dialNum+=d;updNum();if(session?.isEstablished())session.sendDTMF(d);};});
-
-  /* ── Controls ── */
-  btnCall.onclick=()=>session?answerSession():makeCall();
-  btnHang.onclick=hangupCall;
-  btnMute.onclick=toggleMute;
-  btnHold.onclick=toggleHold;
-  btnClear.onclick=()=>{dialNum='';updNum();};
-  btnXfer.onclick=()=>{if(!session)return;const t=prompt('Enter transfer extension:');if(t){try{session.refer('sip:'+t+'@'+CFG.domain);toast('Transferring...','info');}catch(e){toast('Transfer failed','error');}}};
-
-  $('auto-answer-toggle').onchange=function(){autoAns=this.checked;toast('Auto-answer '+(autoAns?'ON':'OFF'),'info');};
-
-  /* ── Status chips ── */
-  document.querySelectorAll('[data-set-status]').forEach(b=>{b.onclick=function(){
-    if(inWrapup){openDisposition();return;}
-    const nextStatus=this.dataset.setStatus;
-    applyStatus({status:nextStatus,display:tc(nextStatus),since:new Date().toISOString()});
-    wsSend({action:'set_status',status:nextStatus});
-  };});
-
-  const campSel=$('campaign-select');
-  if(campSel)campSel.onchange=function(){if(this.value)wsSend({action:'set_campaign',campaign_id:parseInt(this.value)});};
-
-  /* ── Logout ── */
-  $('logout-btn')?.addEventListener('click',e=>{if(inWrapup){e.preventDefault();openDisposition();$('logout-banner').classList.add('visible');setTimeout(()=>$('logout-banner').classList.remove('visible'),3000);}});
-
-  /* ── Prevent accidental page refresh/close during active call or wrapup ── */
-  window.addEventListener('beforeunload',e=>{
-    const pill=$('status-pill');
-    const st=pill?.classList.contains('on_call')||inWrapup;
-    if(st){e.preventDefault();e.returnValue='You have an active call or pending disposition. Leaving will disconnect the call.';return e.returnValue;}
-  });
-
-  /* ── Keyboard ── */
-  document.addEventListener('keydown',e=>{
-    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
-    if('0123456789*#'.includes(e.key)){dialNum+=e.key;updNum();if(session?.isEstablished())session.sendDTMF(e.key);}
-    if(e.key==='Backspace'){e.preventDefault();dialNum=dialNum.slice(0,-1);updNum();}
-    if(e.key==='Enter'&&dialNum&&ua?.isRegistered()&&!session)makeCall();
-    if(e.key==='Escape'&&session)hangupCall();
-  });
-
-  /* ── Helpers ── */
-  function fmt(sec){sec=Math.max(0,Math.floor(sec));const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;return h?h+':'+pad(m)+':'+pad(s):pad(m)+':'+pad(s);}
-  function pad(n){return String(n).padStart(2,'0');}
-  function tc(s){return(s||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
-
-  /* ── Boot ── */
-  document.addEventListener('DOMContentLoaded',()=>{
-    connectWS();initRTC();startHB();startTimers();
-  });
-})();
 </script>
+<script src="{% static 'js/agent.js' %}"></script>
 </body>
+
 </html>

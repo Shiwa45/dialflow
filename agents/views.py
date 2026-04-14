@@ -1,5 +1,6 @@
 # agents/views.py
 import json
+import requests
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render, get_object_or_404
 from django.http import JsonResponse
@@ -32,6 +33,75 @@ def _ensure_active_campaign(agent_status):
     return assigned_campaigns
 
 
+def _fetch_live_ari_channel_ids():
+    cfg = settings.ASTERISK
+    url = f"http://{cfg['ARI_HOST']}:{cfg['ARI_PORT']}/ari/channels"
+    try:
+        r = requests.get(
+            url,
+            auth=(cfg['ARI_USERNAME'], cfg['ARI_PASSWORD']),
+            timeout=3,
+        )
+        if r.status_code != 200:
+            return None
+        return {
+            ch.get('id') for ch in (r.json() or [])
+            if isinstance(ch, dict) and ch.get('id')
+        }
+    except Exception:
+        return None
+
+
+def _heal_transient_agent_state(status_obj):
+    """
+    Heal stale states that can remain after missed ARI channel-destroy events.
+    """
+    # Wrapup without a call log should never block the dashboard.
+    if status_obj.status == 'wrapup' and not (
+        status_obj.wrapup_call_log_id or status_obj.active_call_log_id
+    ):
+        status_obj.go_ready()
+        return status_obj
+
+    if status_obj.status not in ('ringing', 'on_call'):
+        return status_obj
+    if not status_obj.active_channel_id:
+        status_obj.go_ready()
+        return status_obj
+
+    live_ids = _fetch_live_ari_channel_ids()
+    if live_ids is None:
+        return status_obj  # ARI temporarily unavailable; avoid false recovery
+
+    if status_obj.active_channel_id in live_ids:
+        return status_obj
+
+    # Channel is gone: recover to wrapup if we have a call log, else ready.
+    if status_obj.active_call_log_id:
+        now = timezone.now()
+        status_obj.status = 'wrapup'
+        status_obj.status_changed_at = now
+        status_obj.wrapup_started_at = now
+        status_obj.wrapup_call_log_id = status_obj.active_call_log_id
+        status_obj.active_channel_id = None
+        status_obj.active_lead_id = None
+        status_obj.call_started_at = None
+        status_obj.save(update_fields=[
+            'status',
+            'status_changed_at',
+            'wrapup_started_at',
+            'wrapup_call_log_id',
+            'active_channel_id',
+            'active_lead_id',
+            'call_started_at',
+            'updated_at',
+        ])
+        return status_obj
+
+    status_obj.go_ready()
+    return status_obj
+
+
 def agent_required(view_func):
     from functools import wraps
     @wraps(view_func)
@@ -50,6 +120,7 @@ def dashboard(request):
     agent_status, _ = AgentStatus.objects.select_related(
         'active_campaign', 'pause_code'
     ).get_or_create(user=request.user)
+    agent_status = _heal_transient_agent_state(agent_status)
     assigned_campaigns = _ensure_active_campaign(agent_status)
 
     webrtc_config = _build_webrtc_config(request.user)
@@ -96,6 +167,7 @@ def _build_webrtc_config(user):
         'sip_uri':      f'sip:{extension}@{domain}' if extension else '',
         'display_name': user.get_full_name() or user.username,
         'stun':         webrtc.get('STUN_SERVER', 'stun:stun.l.google.com:19302'),
+        'disable_stun': bool(webrtc.get('DISABLE_STUN', True)),
     }
 
 
@@ -105,6 +177,7 @@ def _build_webrtc_config(user):
 @agent_required
 def get_my_status(request):
     status, _ = AgentStatus.objects.get_or_create(user=request.user)
+    status = _heal_transient_agent_state(status)
     _ensure_active_campaign(status)
     return JsonResponse({
         'status':            status.status,
@@ -112,6 +185,10 @@ def get_my_status(request):
         'since':             status.status_changed_at.isoformat(),
         'campaign_id':       status.active_campaign_id,
         'wrapup_remaining':  status.get_wrapup_seconds_remaining(),
+        'active_lead_id':    status.active_lead_id,
+        'active_channel_id': status.active_channel_id,
+        'wrapup_call_log_id': status.wrapup_call_log_id,
+        'active_call_log_id': status.active_call_log_id,
         'today_login_time':  AgentLoginLog.get_today_login_time_display(request.user),
         'pause_code':        status.pause_code.name if status.pause_code else None,
     })
@@ -127,7 +204,7 @@ def set_status(request):
         return JsonResponse({'error': 'Invalid status'}, status=400)
 
     status_obj, _ = AgentStatus.objects.get_or_create(user=request.user)
-    if status_obj.status in ('on_call', 'wrapup'):
+    if status_obj.status in ('ringing', 'on_call', 'wrapup'):
         return JsonResponse({'error': 'Cannot change status while on call or in wrapup'}, status=400)
 
     if new_status == 'break':

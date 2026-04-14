@@ -68,10 +68,12 @@ class SupervisorConsumer(AsyncWebsocketConsumer):
                  'stat_abandon_rate', 'stat_agents_active'))
 
         agents = list(AgentStatus.objects.select_related('user').filter(
-            status__in=['ready', 'on_call', 'wrapup', 'break']
+            status__in=['ready', 'ringing', 'on_call', 'wrapup', 'break', 'training']
         ).values(
             'user_id', 'user__username', 'user__first_name', 'user__last_name',
-            'status', 'active_campaign_id', 'call_started_at', 'status_changed_at',
+            'status', 'active_campaign_id',
+            'call_started_at',      # ← FIX: include for on_call timer
+            'status_changed_at',    # ← already present, for status timer
         ))
 
         return {'campaigns': campaigns, 'agents': agents}

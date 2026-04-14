@@ -1,5 +1,11 @@
-/* supervisor.js — Real-time supervisor monitor helpers
-   Loaded only on the supervisor monitor page.
+/* supervisor.js — Real-time supervisor monitor helpers (Fixed)
+   =============================================================
+   FIXES:
+   1. Agent timers now count from server-provided status_changed_at (DB)
+   2. Timers survive page refresh (snapshot includes status_changed_at)
+   3. Agent status updates include `since` field from DB
+   4. Added talk_time and login_time display per agent
+
    Depends on: app.js (DF, ReconnectingWS)
 */
 'use strict';
@@ -17,6 +23,16 @@ window.Supervisor = (() => {
 
   function statusDot(status) {
     return `<div class="status-dot ${status}" style="flex-shrink:0"></div>`;
+  }
+
+  function fmtDur(sec) {
+    if (sec == null || sec < 0) sec = 0;
+    sec = Math.floor(sec);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
 
   // ── Agent card builder ──────────────────────────────────────────────────────
@@ -39,6 +55,9 @@ window.Supervisor = (() => {
         <i class="fa-solid fa-phone-volume"></i>
       </button>` : '';
 
+    // ── FIX: Show call duration separately from status time ──
+    const callTimerId = onCall ? `<div class="agent-card-call-time" id="agtcall-${agent.user_id}" style="font-size:11px;color:var(--color-accent);font-family:var(--font-mono);margin-top:2px">00:00</div>` : '';
+
     return `
     <div class="agent-card" id="agentcard-${agent.user_id}">
       <div class="flex items-center justify-between">
@@ -50,6 +69,7 @@ window.Supervisor = (() => {
         ${badgeHtml(agent.status, agent.status_display)}
       </div>
       ${campName ? `<div class="agent-card-campaign">${campName}</div>` : ''}
+      ${callTimerId}
       <div class="flex gap-2" style="margin-top:8px">
         ${monitorBtns}
         <button class="btn btn-secondary btn-sm" style="padding:3px 8px;font-size:11px"
@@ -63,23 +83,26 @@ window.Supervisor = (() => {
   // ── Campaign control card builder ───────────────────────────────────────────
   function buildCampaignControl(c) {
     const startBtn = c.status !== 'active'
-      ? `<button class="btn btn-success btn-sm" onclick="Supervisor.campaignAction(${c.id},'start')"><i class="fa-solid fa-play"></i></button>`
+      ? `<button class="btn btn-success btn-sm" onclick="Supervisor.campaignAction(${c.id},'start')">
+           <i class="fa-solid fa-play"></i> Start
+         </button>`
       : '';
     const pauseBtn = c.status === 'active'
-      ? `<button class="btn btn-secondary btn-sm" onclick="Supervisor.campaignAction(${c.id},'pause')"><i class="fa-solid fa-pause"></i></button>`
+      ? `<button class="btn btn-warning btn-sm" onclick="Supervisor.campaignAction(${c.id},'pause')">
+           <i class="fa-solid fa-pause"></i> Pause
+         </button>`
       : '';
-    const stopBtn  = c.status !== 'stopped'
-      ? `<button class="btn btn-danger btn-sm" onclick="Supervisor.campaignAction(${c.id},'stop')"><i class="fa-solid fa-stop"></i></button>`
+    const stopBtn = c.status !== 'stopped'
+      ? `<button class="btn btn-danger btn-sm" onclick="Supervisor.campaignAction(${c.id},'stop')">
+           <i class="fa-solid fa-stop"></i> Stop
+         </button>`
       : '';
 
     return `
-    <div class="campaign-control" id="campctrl-${c.id}">
+    <div class="campaign-control">
       <div class="campaign-control-header">
-        <div>
-          <div class="campaign-control-name">${c.name}</div>
-          <span class="badge badge-${c.status}" style="margin-top:4px;font-size:11px">${c.status}</span>
-        </div>
-        <div style="display:flex;gap:6px">${startBtn}${pauseBtn}${stopBtn}</div>
+        <div class="campaign-control-name">${c.name}</div>
+        <span class="badge badge-${c.status}" style="font-size:11px">${titleCase(c.status)}</span>
       </div>
       <div class="campaign-control-stats">
         <div class="campaign-stat">
@@ -99,10 +122,13 @@ window.Supervisor = (() => {
           <span>Agents</span>
         </div>
       </div>
+      <div class="flex gap-2" style="margin-top:10px">
+        ${startBtn}${pauseBtn}${stopBtn}
+      </div>
     </div>`;
   }
 
-  // ── Actions ─────────────────────────────────────────────────────────────────
+  // ── Actions ──────────────────────────────────────────────────────────────────
   async function campaignAction(id, action) {
     if (action === 'stop' && !confirm('Stop this campaign? Active calls will not be affected.')) return;
     const csrf = document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
@@ -153,5 +179,6 @@ window.Supervisor = (() => {
     forceLogout,
     monitorCall,
     titleCase,
+    fmtDur,
   };
 })();

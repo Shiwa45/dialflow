@@ -223,7 +223,7 @@ def _collect_metrics(campaign_id: int, assigned_ids: list) -> DialerMetrics:
     # ── Agent status counts (always from DB — this is cheap) ─────────────
     sc = AgentStatus.objects.filter(user_id__in=assigned_ids).aggregate(
         ready   = Count("id", filter=Q(status="ready")),
-        on_call = Count("id", filter=Q(status="on_call")),
+        on_call = Count("id", filter=Q(status__in=["ringing", "on_call"])),
         wrapup  = Count("id", filter=Q(status="wrapup")),
     )
     agents_ready   = sc["ready"]   or 0

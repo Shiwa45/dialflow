@@ -9,6 +9,17 @@ echo ===========================
 echo [0/7] Setting up WSL2 port forwarding for Asterisk...
 for /f "tokens=*" %%i in ('wsl bash -c "hostname -I | awk '{print $1}'"') do set WSL_IP=%%i
 echo WSL2 IP: %WSL_IP%
+
+for /f "tokens=*" %%i in ('powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.PrefixOrigin -ne 'WellKnown' } | Sort-Object SkipAsSource,InterfaceMetric | Select-Object -First 1 -ExpandProperty IPAddress)"') do set HOST_IP=%%i
+if "%HOST_IP%"=="" set HOST_IP=192.168.1.13
+echo Windows Host IP: %HOST_IP%
+
+echo [0b/7] Writing network IPs to .env (WSL ARI/AMI + host WebRTC domain)...
+python -c "import re,sys; f=open('.env','r',encoding='utf-8'); c=f.read(); f.close(); wsl='%WSL_IP%'; host='%HOST_IP%'; c=re.sub(r'(?m)^ARI_HOST=.*$','ARI_HOST='+wsl,c); c=re.sub(r'(?m)^AMI_HOST=.*$','AMI_HOST='+wsl,c); c=re.sub(r'(?m)^WEBRTC_DOMAIN=.*$','WEBRTC_DOMAIN='+host,c); open('.env','w',encoding='utf-8').write(c); print('ARI_HOST/AMI_HOST='+wsl+' WEBRTC_DOMAIN='+host)"
+
+echo [0c/7] Updating Asterisk NAT media/signaling address in asterisk\pjsip.conf ...
+python -c "import re,sys; p='asterisk/pjsip.conf'; c=open(p,'r',encoding='utf-8').read(); host='%HOST_IP%'; c=re.sub(r'(?m)^external_media_address=.*$','external_media_address='+host,c); c=re.sub(r'(?m)^external_signaling_address=.*$','external_signaling_address='+host,c); open(p,'w',encoding='utf-8').write(c); print('pjsip NAT addresses set to '+host)"
+
 netsh interface portproxy delete v4tov4 listenport=8089 listenaddress=0.0.0.0 >nul 2>&1
 netsh interface portproxy delete v4tov4 listenport=8088 listenaddress=0.0.0.0 >nul 2>&1
 netsh interface portproxy delete v4tov4 listenport=5060 listenaddress=0.0.0.0 >nul 2>&1
@@ -19,10 +30,12 @@ netsh advfirewall firewall delete rule name="DialFlow Asterisk HTTP" >nul 2>&1
 netsh advfirewall firewall delete rule name="DialFlow Asterisk HTTPS" >nul 2>&1
 netsh advfirewall firewall delete rule name="DialFlow SIP UDP" >nul 2>&1
 netsh advfirewall firewall delete rule name="DialFlow SIP TCP" >nul 2>&1
+netsh advfirewall firewall delete rule name="DialFlow RTP UDP" >nul 2>&1
 netsh advfirewall firewall add rule name="DialFlow Asterisk HTTP" protocol=TCP dir=in localport=8088 action=allow
 netsh advfirewall firewall add rule name="DialFlow Asterisk HTTPS" protocol=TCP dir=in localport=8089 action=allow
 netsh advfirewall firewall add rule name="DialFlow SIP UDP" protocol=UDP dir=in localport=5060 action=allow
 netsh advfirewall firewall add rule name="DialFlow SIP TCP" protocol=TCP dir=in localport=5060 action=allow
+netsh advfirewall firewall add rule name="DialFlow RTP UDP" protocol=UDP dir=in localport=10000-20000 action=allow
 echo Port forwarding configured.
 
 echo [1/7] Starting WSL Services (Asterisk ^& Redis)...
@@ -62,8 +75,8 @@ start "DialFlow: Django Server (Daphne)" cmd /k "chcp 65001 >nul & set PYTHONIOE
 echo.
 echo All services successfully launched!
 echo.
-echo Open in browser: https://192.168.1.13:8000
-echo Trust Asterisk:  https://192.168.1.13:8089/httpstatus
+echo Open in browser: https://%HOST_IP%:8000
+echo Trust Asterisk:  https://%HOST_IP%:8089/httpstatus
 echo.
 echo NOTE: Run this script as Administrator for port forwarding to work.
 echo.

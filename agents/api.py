@@ -20,7 +20,7 @@ class AgentStatusViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         from agents.models import AgentStatus
         return AgentStatus.objects.select_related('user').filter(
-            status__in=['ready', 'on_call', 'wrapup', 'break']
+            status__in=['ready', 'ringing', 'on_call', 'wrapup', 'break']
         )
 
 

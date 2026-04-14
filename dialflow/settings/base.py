@@ -191,6 +191,7 @@ WEBRTC = {
     'WS_URL':      config('WEBRTC_WS_URL',      default='ws://127.0.0.1:8088/ws'),
     'DOMAIN':      config('WEBRTC_DOMAIN',       default='127.0.0.1'),
     'STUN_SERVER': config('WEBRTC_STUN_SERVER',  default='stun:stun.l.google.com:19302'),
+    'DISABLE_STUN': config('WEBRTC_DISABLE_STUN', default=True, cast=bool),
 }
 
 # ─── Dialer Config ────────────────────────────────────────────────────────────

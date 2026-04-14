@@ -35,6 +35,12 @@ app.conf.beat_schedule = {
         'schedule': 60.0,
     },
 
+    # ── Heal stale ringing/on_call states when ARI channel is gone ───────────
+    'stale-live-call-cleanup': {
+        'task': 'agents.tasks.cleanup_stale_live_calls',
+        'schedule': 15.0,
+    },
+
     # ── Campaign stats refresh ────────────────────────────────────────────────
     'campaign-stats-update': {
         'task': 'campaigns.tasks.update_campaign_stats',

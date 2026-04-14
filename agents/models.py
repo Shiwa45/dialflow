@@ -95,6 +95,7 @@ class AgentStatus(TimestampedModel):
 
     STATUS_OFFLINE  = 'offline'
     STATUS_READY    = 'ready'
+    STATUS_RINGING  = 'ringing'
     STATUS_ON_CALL  = 'on_call'
     STATUS_WRAPUP   = 'wrapup'
     STATUS_BREAK    = 'break'
@@ -103,6 +104,7 @@ class AgentStatus(TimestampedModel):
     STATUS_CHOICES = [
         (STATUS_OFFLINE,  'Offline'),
         (STATUS_READY,    'Ready'),
+        (STATUS_RINGING,  'Ringing'),
         (STATUS_ON_CALL,  'On Call'),
         (STATUS_WRAPUP,   'Wrap-up'),
         (STATUS_BREAK,    'Break'),
@@ -184,18 +186,38 @@ class AgentStatus(TimestampedModel):
         })
 
     def go_ready(self):
-        self.set_status('ready', pause_code=None)
+        self.set_status(
+            'ready',
+            pause_code=None,
+            active_channel_id=None,
+            active_lead_id=None,
+            active_call_log_id=None,
+            call_started_at=None,
+            wrapup_started_at=None,
+            wrapup_call_log_id=None,
+        )
 
     def go_break(self, pause_code=None):
-        self.set_status('break', pause_code=pause_code)
+        self.set_status(
+            'break',
+            pause_code=pause_code,
+            wrapup_started_at=None,
+            wrapup_call_log_id=None,
+        )
 
     def go_training(self):
-        self.set_status('training', pause_code=None)
+        self.set_status(
+            'training',
+            pause_code=None,
+            wrapup_started_at=None,
+            wrapup_call_log_id=None,
+        )
 
     def go_offline(self):
         self.set_status('offline',
             active_channel_id=None, active_lead_id=None,
             active_call_log_id=None, call_started_at=None,
+            wrapup_started_at=None, wrapup_call_log_id=None,
             pause_code=None,
         )
         # Close login session

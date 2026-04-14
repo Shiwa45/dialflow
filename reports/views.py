@@ -259,7 +259,7 @@ def live_stats_api(request):
     campaigns = list(Campaign.objects.filter(status__in=['active','paused']).values(
         'id','name','status','stat_calls_today','stat_answered_today','stat_abandon_rate','stat_agents_active'))
     agents = list(AgentStatus.objects.select_related('user','pause_code').filter(
-        status__in=['ready','on_call','wrapup','break']).values(
+        status__in=['ready','ringing','on_call','wrapup','break']).values(
         'user_id','user__username','status','active_campaign_id','call_started_at','status_changed_at','pause_code__name'))
     return JsonResponse({'campaigns': campaigns, 'agents': agents, 'ts': timezone.now().isoformat()})
 

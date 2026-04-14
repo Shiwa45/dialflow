@@ -68,7 +68,7 @@ def record_dialer_outcomes():
                 user_id__in=agent_ids
             ).aggregate(
                 total_agents  = Count('id', filter=~Q(status='offline')),
-                busy_agents   = Count('id', filter=Q(status='on_call')),
+                busy_agents   = Count('id', filter=Q(status__in=['ringing', 'on_call'])),
             )
             total_agents = agent_agg['total_agents'] or 1
             busy_agents  = agent_agg['busy_agents'] or 0

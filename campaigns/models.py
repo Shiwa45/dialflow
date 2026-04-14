@@ -222,7 +222,7 @@ class Campaign(TimestampedModel):
         assigned = self.agents.values_list('agent_id', flat=True)
         return AgentStatus.objects.filter(
             user_id__in=assigned,
-            status__in=['ready', 'on_call', 'wrapup'],
+            status__in=['ready', 'ringing', 'on_call', 'wrapup'],
         ).count()
 
     def get_hopper_count(self):

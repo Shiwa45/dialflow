@@ -15,6 +15,7 @@ Event flow:
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime
@@ -27,6 +28,7 @@ from django.db import transaction
 from django.utils import timezone
 
 logger = logging.getLogger('telephony.ari_worker')
+ARI_TRACE = os.environ.get('DIALFLOW_ARI_TRACE', '1') == '1'
 
 
 def build_cid(campaign_id=None, lead_id=None, customer_channel=None, agent_channel=None):
@@ -159,6 +161,21 @@ class ARIEventHandler:
         self.agent_channels  = {}   # agent_id → channel_id
         self.pending_bridges = {}   # agent_channel_id → bridge info (waiting for agent answer)
         self.pending_by_agent = {}  # agent_id → bridge info (fallback when ARI channel ids differ)
+        self.pending_agent_channels = {}  # agent_channel_id -> pending info
+
+    def _trace(self, msg, *args):
+        if ARI_TRACE:
+            logger.warning('[ARI-TRACE] ' + msg, *args)
+
+    def _trace_pending(self, label):
+        if not ARI_TRACE:
+            return
+        try:
+            pb = list(self.pending_bridges.keys())
+            pa = {k: (v.get('customer_channel'), v.get('originated_agent_channel')) for k, v in self.pending_by_agent.items()}
+            logger.warning('[ARI-TRACE] %s pending_bridges=%s pending_by_agent=%s', label, pb, pa)
+        except Exception:
+            logger.warning('[ARI-TRACE] %s pending dump failed', label)
 
     # ── Dispatcher ────────────────────────────────────────────────────────────
 
@@ -190,13 +207,37 @@ class ARIEventHandler:
         channel    = event.get('channel', {})
         channel_id = channel.get('id', '')
 
-        # Read channel variables to understand call purpose
-        vars_raw = event.get('args', [])   # ARI passes vars as positional args
+        # Read channel variables to understand call purpose.
+        # get_channel_var makes an HTTP REST call to Asterisk — if ARI_HOST is
+        # 127.0.0.1 on Windows with WSL2, this can fail due to portproxy
+        # flakiness.  The run_ari command now detects WSL2 IP directly, but we
+        # log failures here so they're visible in the ARI worker window.
         call_type      = await sync_to_async(self.ari.get_channel_var)(channel_id, 'CALL_TYPE')      or ''
         campaign_id    = await sync_to_async(self.ari.get_channel_var)(channel_id, 'CAMPAIGN_ID')    or ''
         lead_id        = await sync_to_async(self.ari.get_channel_var)(channel_id, 'LEAD_ID')        or ''
         agent_id       = await sync_to_async(self.ari.get_channel_var)(channel_id, 'AGENT_ID')       or ''
         customer_num   = await sync_to_async(self.ari.get_channel_var)(channel_id, 'CUSTOMER_NUMBER') or channel.get('caller', {}).get('number', '')
+
+        if not call_type:
+            # Variables unreadable — this usually means the ARI REST call to
+            # Asterisk failed (wrong IP, portproxy issue, or channel already gone).
+            # Log all available event info so we can diagnose.
+            caller = channel.get('caller', {})
+            dialplan = channel.get('dialplan', {})
+            logger.error(
+                'StasisStart: CALL_TYPE variable is EMPTY for channel=%s — '
+                'ARI REST call to get_channel_var failed (check ARI_HOST connectivity). '
+                'channel_name=%s caller=%s exten=%s context=%s '
+                'Ignoring this StasisStart to avoid dropping a live channel.',
+                channel_id,
+                channel.get('name', '?'),
+                caller.get('number', '?'),
+                dialplan.get('exten', '?'),
+                dialplan.get('context', '?'),
+            )
+            # Do not hangup here; late/partial StasisStart events can occur
+            # during normal call flow and must not tear down active calls.
+            return
         cid = build_cid(campaign_id=campaign_id, lead_id=lead_id, customer_channel=channel_id if call_type == 'autodial' else None, agent_channel=channel_id if call_type == 'agent_leg' else None)
 
         logger.info(f'StasisStart: {cid} channel={channel_id} type={call_type} campaign={campaign_id} lead={lead_id} agent={agent_id}')
@@ -222,9 +263,11 @@ class ARIEventHandler:
         await sync_to_async(self._update_call_log)(channel_id, 'answered', lead_id, campaign_id)
 
         # Answer the channel so media can flow
+        self._trace('autodial answer customer_channel=%s cid=%s', channel_id, build_cid(campaign_id=campaign_id, lead_id=lead_id, customer_channel=channel_id))
         await sync_to_async(self.ari.answer)(channel_id)
 
         # Play hold music while we find an agent
+        self._trace('autodial moh_start customer_channel=%s', channel_id)
         await sync_to_async(self.ari.moh_start)(channel_id)
 
         # Atomically reserve an available agent from DB so parallel answered calls
@@ -250,6 +293,8 @@ class ARIEventHandler:
 
         agent_id = int(agent_id)
         self.agent_channels[agent_id] = channel_id
+        self._trace('agent_leg stasis_start agent_id=%s channel=%s', agent_id, channel_id)
+        self._trace_pending('before agent_leg resolution')
 
         # DO NOT call ari.answer() here.
         # This channel is an ARI-originated OUTBOUND leg (Asterisk → JsSIP).
@@ -262,20 +307,54 @@ class ARIEventHandler:
 
         # Check if there's a pending bridge waiting for this agent.
         # Primary lookup: channel id (normal case — StasisStart arrived after originate).
-        pending = self.pending_bridges.pop(channel_id, None)
+        pending = self.pending_bridges.get(channel_id)
         if not pending:
             # Fallback: agent-id lookup.  Covers two cases:
             #   a) StasisStart arrived before originate_to_app returned (race condition
             #      handled by pre-registering pending_by_agent before the HTTP call).
             #   b) Asterisk assigned a different channel id in StasisStart than the one
             #      returned by originate (seen on some Asterisk versions).
-            pending = self.pending_by_agent.pop(agent_id, None)
+            pending = self.pending_by_agent.get(agent_id)
             if pending:
                 stale_channel_id = pending.get('originated_agent_channel')
                 if stale_channel_id and stale_channel_id != channel_id:
+                    # Re-key pending to the actual Stasis channel id and stop
+                    # tracking the stale originated id. We'll spawn a watcher
+                    # on the new id below.
                     self.pending_bridges.pop(stale_channel_id, None)
+                    pending['originated_agent_channel'] = channel_id
+                    self.pending_bridges[channel_id] = pending
 
         if pending:
+            # StasisStart may arrive while the outbound agent leg is still Ring/Ringing.
+            # Bridging too early can cause CANCEL races. Only bridge once channel is Up.
+            ch = await sync_to_async(self.ari.get)(f'/channels/{channel_id}')
+            state = (ch.get('state', '') if ch else '').lower()
+            self._trace('agent_leg channel lookup channel=%s state=%s raw=%s', channel_id, state or 'unknown', ch)
+            if state != 'up':
+                logger.info(
+                    f'Agent leg StasisStart before answer; waiting for Up. '
+                    f"agent={agent_id} channel={channel_id} state={state or 'unknown'}"
+                )
+                # Ensure fallback lookup remains intact.
+                self.pending_bridges[channel_id] = pending
+                self.pending_by_agent[agent_id] = pending
+                # In some Asterisk builds there is no second StasisStart after 200 OK.
+                # Keep an explicit watcher on this channel id.
+                self._trace_pending('agent_leg wait for up')
+                asyncio.create_task(self._await_agent_answer(channel_id, agent_id))
+                return
+
+            # Channel is Up — consume pending and complete bridge.
+            self.pending_bridges.pop(channel_id, None)
+            self.pending_agent_channels.pop(channel_id, None)
+            self.pending_by_agent.pop(agent_id, None)
+            stale_channel_id = pending.get('originated_agent_channel')
+            if stale_channel_id and stale_channel_id != channel_id:
+                self.pending_bridges.pop(stale_channel_id, None)
+                self.pending_agent_channels.pop(stale_channel_id, None)
+
+            self._trace_pending('agent_leg completing bridge')
             await self._complete_bridge(channel_id, pending)
         else:
             # No pending bridge found.  Check if _await_agent_answer already
@@ -325,15 +404,21 @@ class ARIEventHandler:
         pending = {
             'customer_channel':         channel_id,
             'agent_id':                 agent.id,
+            'agent_ext':                agent_ext,
             'campaign_id':              campaign_id,
             'lead_id':                  lead_id,
             'originated_agent_channel': None,   # filled in below after originate
         }
         self.pending_by_agent[agent.id] = pending
+        self._trace_pending('after pending_by_agent seed')
 
         logger.info(f'Originating agent leg: {cid} agent_id={agent.id} ext={agent_ext} customer_channel={channel_id}')
 
-        result = await sync_to_async(self.ari.originate_to_app)(agent_endpoint, variables=variables)
+        # Give WebRTC leg enough time to pass browser permission/auto-answer flow.
+        result = await sync_to_async(self.ari.originate_to_app)(
+            agent_endpoint, variables=variables, timeout=60
+        )
+        self._trace('originate_to_app result agent_id=%s endpoint=%s result=%s', agent.id, agent_endpoint, result)
         if not result:
             logger.error(f'Failed to originate agent leg: {cid} agent_id={agent.id} ext={agent_ext}')
             self.pending_by_agent.pop(agent.id, None)
@@ -354,38 +439,75 @@ class ARIEventHandler:
         # already holds a reference to it, so this update is visible there too).
         pending['originated_agent_channel'] = agent_channel_id
         self.pending_bridges[agent_channel_id] = pending
+        self.pending_agent_channels[agent_channel_id] = pending
+        self._trace_pending('after pending_bridges set')
         # Note: pending_by_agent[agent.id] already points to this same dict.
 
         # Notify agent dashboard immediately so it shows the ringing call
+        await sync_to_async(self._set_agent_ringing)(
+            agent.id, channel_id, lead_id, campaign_id
+        )
         lead_info     = await sync_to_async(self._get_lead_info)(lead_id)
         campaign_info = await sync_to_async(self._get_campaign_info)(campaign_id)
         await sync_to_async(self._ws_call_incoming)(agent.id, channel_id, lead_info, campaign_info)
 
         logger.info(f'Waiting for agent answer: {cid} agent_id={agent.id} agent_channel={agent_channel_id}')
-        asyncio.create_task(self._await_agent_answer(agent_channel_id, agent.id))
+        asyncio.create_task(self._await_agent_answer(agent_channel_id, agent.id, timeout_seconds=70))
 
-    async def _await_agent_answer(self, agent_channel_id, agent_id, timeout_seconds=35):
+    async def _await_agent_answer(
+        self,
+        agent_channel_id,
+        agent_id,
+        timeout_seconds=35,
+        force_bridge_after_ring_seconds=2,
+    ):
         """
         Fallback path when agent-leg StasisStart is not delivered.
         Poll channel state and complete bridge once agent channel is Up.
         """
-        deadline = time.time() + timeout_seconds
+        started_waiting_at = time.time()
+        deadline = started_waiting_at + timeout_seconds
         while time.time() < deadline:
             pending = self.pending_bridges.get(agent_channel_id)
             if not pending:
                 # Bridge already completed (or cleaned up) via normal Stasis path.
+                self._trace('await_agent_answer stop no pending agent_channel=%s', agent_channel_id)
                 return
 
             channel = await sync_to_async(self.ari.get)(f'/channels/{agent_channel_id}')
             if channel is None:
                 # Channel vanished; stop waiting.
+                self._trace('await_agent_answer channel vanished agent_channel=%s', agent_channel_id)
+                channels_snapshot = await sync_to_async(self.ari.get)('/channels')
+                self._trace('await_agent_answer channels snapshot after vanish=%s', channels_snapshot)
+                pending = self.pending_bridges.get(agent_channel_id)
+                replacement = None
+                if pending:
+                    replacement = await self._find_replacement_agent_channel(
+                        pending, agent_channel_id
+                    )
+                if replacement:
+                    self._trace(
+                        'await_agent_answer rebind pending from %s to replacement %s',
+                        agent_channel_id, replacement,
+                    )
+                    self.pending_bridges.pop(agent_channel_id, None)
+                    self.pending_agent_channels.pop(agent_channel_id, None)
+                    pending['originated_agent_channel'] = replacement
+                    self.pending_bridges[replacement] = pending
+                    self.pending_agent_channels[replacement] = pending
+                    self.agent_channels[agent_id] = replacement
+                    agent_channel_id = replacement
+                    continue
                 break
 
             state = (channel.get('state') or '').lower()
+            self._trace('await_agent_answer poll agent_channel=%s state=%s channel=%s', agent_channel_id, state or 'unknown', channel)
             if state == 'up':
                 pending = self.pending_bridges.pop(agent_channel_id, None)
                 if not pending:
                     return
+                self.pending_agent_channels.pop(agent_channel_id, None)
                 self.pending_by_agent.pop(agent_id, None)
                 cid = build_cid(
                     campaign_id=pending.get('campaign_id'),
@@ -396,12 +518,34 @@ class ARIEventHandler:
                 logger.warning(
                     f'Agent answer detected via channel-state fallback (missing agent StasisStart). {cid}'
                 )
+                self._trace_pending('await_agent_answer completing bridge')
                 await self._complete_bridge(agent_channel_id, pending)
                 return
 
-            await asyncio.sleep(1)
+            ring_wait = time.time() - started_waiting_at
+            if state in ('ring', 'ringing', 'down') and ring_wait >= force_bridge_after_ring_seconds:
+                pending = self.pending_bridges.pop(agent_channel_id, None)
+                if not pending:
+                    return
+                self.pending_agent_channels.pop(agent_channel_id, None)
+                self.pending_by_agent.pop(agent_id, None)
+                cid = build_cid(
+                    campaign_id=pending.get('campaign_id'),
+                    lead_id=pending.get('lead_id'),
+                    customer_channel=pending.get('customer_channel'),
+                    agent_channel=agent_channel_id,
+                )
+                logger.warning(
+                    f'Agent leg state={state or "unknown"} after {int(ring_wait)}s; forcing bridge/answer to avoid MOH delay. {cid}'
+                )
+                self._trace_pending('await_agent_answer force bridge on ringing')
+                await self._complete_bridge(agent_channel_id, pending)
+                return
+
+            await asyncio.sleep(0.5)
 
         pending = self.pending_bridges.pop(agent_channel_id, None)
+        self.pending_agent_channels.pop(agent_channel_id, None)
         if pending:
             self.pending_by_agent.pop(agent_id, None)
             customer_channel_id = pending.get('customer_channel')
@@ -412,13 +556,27 @@ class ARIEventHandler:
                 agent_channel=agent_channel_id,
             )
             logger.error(f'Agent answer timeout; dropping customer leg to avoid infinite MOH. {cid}')
+            self._trace_pending('await_agent_answer timeout')
             await sync_to_async(self._release_agent_reservation)(agent_id)
             if customer_channel_id:
                 await sync_to_async(self._mark_call_dropped)(customer_channel_id)
                 await sync_to_async(self.ari.hangup)(customer_channel_id)
 
     async def _complete_bridge(self, agent_channel_id, pending):
-        """Called when the agent answers — create bridge and connect customer ↔ agent."""
+        """Called when the agent answers — create bridge and connect customer ↔ agent.
+
+        FIX: The original code did not answer the agent channel before adding it
+        to the bridge. For PJSIP channels originated via originate_to_app, the
+        channel enters Stasis in 'Ring' state. Adding a ringing channel to a
+        mixing bridge does NOT establish media — the channel must be in 'Up' state.
+
+        The fix: after JsSIP sends SIP 200 OK (which we detect via channel state
+        polling in _await_agent_answer, or via StasisStart), we explicitly call
+        ari.answer() on the agent channel. For outbound-originated channels that
+        are already Up (JsSIP answered the INVITE), ari.answer() is a no-op.
+        For channels still in Ring/Ringing state (race condition), this forces
+        them Up so the bridge can mix audio.
+        """
         customer_channel_id = pending['customer_channel']
         agent_id            = pending['agent_id']
         campaign_id         = pending['campaign_id']
@@ -434,39 +592,49 @@ class ARIEventHandler:
         if customer_channel_id not in self.active_calls:
             logger.warning(f'Customer channel gone before bridge completion. {cid}')
             await sync_to_async(self.ari.hangup)(agent_channel_id)
-            # Customer never associated with agent — release the DB reservation
             await sync_to_async(self._release_agent_reservation)(agent_id)
             return
 
-        # Guard against double bridge creation (e.g. early StasisStart via
-        # _handle_agent_leg AND later _await_agent_answer both calling us).
+        # Guard against double bridge creation
         if self.active_calls[customer_channel_id].get('bridge_id'):
             logger.warning(f'Bridge already exists for customer {customer_channel_id}, skipping duplicate _complete_bridge. {cid}')
             return
 
-        # ── CRITICAL: stamp agent_id on the customer entry NOW, before any await ──
-        # on_channel_destroyed reads this to call _set_agent_wrapup. Without this,
-        # a customer hangup during moh_stop/create_bridge/add_to_bridge would leave
-        # the agent permanently stuck in on_call with no cleanup path.
+        # ── CRITICAL: stamp agent_id on the customer entry NOW ──
         self.active_calls[customer_channel_id]['agent_id'] = agent_id
 
+        # ── FIX: Ensure agent channel is in Up state before bridging ──
+        # For originate_to_app channels, JsSIP sends SIP 200 OK which Asterisk
+        # processes, but the ARI channel may still report as 'Ring'. Calling
+        # answer() forces it to 'Up'. If already Up, this is a harmless no-op.
+        agent_ch_state = await sync_to_async(self.ari.get)(f'/channels/{agent_channel_id}')
+        self._trace('complete_bridge pre-answer agent_channel=%s state=%s payload=%s', agent_channel_id, (agent_ch_state or {}).get('state', 'unknown'), agent_ch_state)
+        if agent_ch_state and (agent_ch_state.get('state', '') or '').lower() != 'up':
+            logger.info(f'Agent channel {agent_channel_id} state={agent_ch_state.get("state")} — forcing answer. {cid}')
+            ans = await sync_to_async(self.ari.answer)(agent_channel_id)
+            self._trace('complete_bridge forced answer result agent_channel=%s result=%s', agent_channel_id, ans)
+            # Brief pause to let Asterisk process the answer
+            await asyncio.sleep(0.3)
+
         # Stop hold music on customer
-        await sync_to_async(self.ari.moh_stop)(customer_channel_id)
+        moh = await sync_to_async(self.ari.moh_stop)(customer_channel_id)
+        self._trace('complete_bridge moh_stop customer=%s result=%s', customer_channel_id, moh)
 
         # Customer may have hung up while moh_stop was in flight
         if customer_channel_id not in self.active_calls:
             logger.warning(f'Customer hung up during moh_stop. {cid}')
             await sync_to_async(self.ari.hangup)(agent_channel_id)
-            return  # on_channel_destroyed already triggered _set_agent_wrapup
+            return
 
         # Create bridge
         bridge_name   = f'bridge_{campaign_id}_{lead_id}_{int(time.time())}'
         bridge_result = await sync_to_async(self.ari.create_bridge)(name=bridge_name)
+        self._trace('complete_bridge create_bridge name=%s result=%s', bridge_name, bridge_result)
         if not bridge_result:
             logger.error(f'Failed to create ARI bridge. {cid}')
             await sync_to_async(self.ari.hangup)(customer_channel_id)
             await sync_to_async(self.ari.hangup)(agent_channel_id)
-            return  # ChannelDestroyed will trigger _set_agent_wrapup via agent_id we stamped
+            return
 
         bridge_id = bridge_result.get('id')
 
@@ -477,8 +645,18 @@ class ARIEventHandler:
             return
 
         # Add both channels to the bridge
-        await sync_to_async(self.ari.add_to_bridge)(bridge_id, customer_channel_id)
-        await sync_to_async(self.ari.add_to_bridge)(bridge_id, agent_channel_id)
+        add_cust = await sync_to_async(self.ari.add_to_bridge)(bridge_id, customer_channel_id)
+        add_agent = await sync_to_async(self.ari.add_to_bridge)(bridge_id, agent_channel_id)
+        self._trace('complete_bridge add_to_bridge bridge=%s customer=%s result=%s', bridge_id, customer_channel_id, add_cust)
+        self._trace('complete_bridge add_to_bridge bridge=%s agent=%s result=%s', bridge_id, agent_channel_id, add_agent)
+
+        # ARI addChannel commonly returns {} on success; only None means REST failure.
+        if add_cust is None or add_agent is None:
+            logger.error(f'Failed to add channel(s) to bridge. {cid} cust={add_cust} agent={add_agent}')
+            # Try cleanup
+            await sync_to_async(self.ari.hangup)(customer_channel_id)
+            await sync_to_async(self.ari.hangup)(agent_channel_id)
+            return
 
         # Final check — customer could have hung up during add_to_bridge
         if customer_channel_id not in self.active_calls:
@@ -494,15 +672,25 @@ class ARIEventHandler:
             'lead_id':          lead_id,
             'created_at':       timezone.now(),
         }
-        # agent_id already stamped above; just update bridge_id
         self.active_calls[customer_channel_id]['bridge_id'] = bridge_id
 
         # Track agent channel in active_calls too
         self.active_calls[agent_channel_id] = {
-            'type':     'agent',
-            'agent_id': agent_id,
+            'type':      'agent',
+            'agent_id':  agent_id,
             'bridge_id': bridge_id,
         }
+
+        # Persist bridge/agent binding on the customer call log row.
+        await sync_to_async(self._bind_call_log_agent)(
+            customer_channel_id, agent_id, campaign_id, lead_id
+        )
+        from calls.models import CallLog
+        await sync_to_async(CallLog.objects.filter(channel_id=customer_channel_id).update)(
+            bridge_id=bridge_id,
+            answered_at=timezone.now(),
+            updated_at=timezone.now(),
+        )
 
         # Mark agent as on-call in DB
         await sync_to_async(self._set_agent_on_call)(agent_id, customer_channel_id, lead_id, campaign_id)
@@ -524,9 +712,54 @@ class ARIEventHandler:
 
     async def on_channel_destroyed(self, event):
         channel_id = event.get('channel', {}).get('id', '')
+        cause = event.get('cause')
+        cause_txt = event.get('cause_txt', '')
+
+        pending_agent = self.pending_agent_channels.pop(channel_id, None)
+        if pending_agent:
+            agent_id = pending_agent.get('agent_id')
+            customer_channel_id = pending_agent.get('customer_channel')
+            replacement = await self._find_replacement_agent_channel(
+                pending_agent, channel_id
+            )
+            if replacement:
+                self._trace(
+                    'pending agent destroy ignored; replacement channel found old=%s new=%s',
+                    channel_id, replacement,
+                )
+                pending_agent['originated_agent_channel'] = replacement
+                self.pending_bridges.pop(channel_id, None)
+                self.pending_bridges[replacement] = pending_agent
+                self.pending_agent_channels[replacement] = pending_agent
+                if agent_id is not None:
+                    self.agent_channels[agent_id] = replacement
+                return
+            cid = build_cid(
+                campaign_id=pending_agent.get('campaign_id'),
+                lead_id=pending_agent.get('lead_id'),
+                customer_channel=customer_channel_id,
+                agent_channel=channel_id,
+            )
+            logger.error(
+                'Pending agent leg destroyed before answer. %s cause=%s cause_txt=%s',
+                cid, cause, cause_txt or 'n/a',
+            )
+            self.pending_bridges.pop(channel_id, None)
+            if agent_id is not None:
+                self.pending_by_agent.pop(agent_id, None)
+                await sync_to_async(self._release_agent_reservation)(agent_id)
+            if customer_channel_id:
+                await sync_to_async(self._mark_call_dropped)(customer_channel_id)
+                await sync_to_async(self.ari.hangup)(customer_channel_id)
+            return
+
         call_data  = self.active_calls.pop(channel_id, None)
 
         if not call_data:
+            self._trace(
+                'channel_destroyed untracked channel=%s cause=%s cause_txt=%s raw=%s',
+                channel_id, cause, cause_txt or 'n/a', event.get('channel', {}),
+            )
             return
 
         cid = build_cid(
@@ -553,10 +786,64 @@ class ARIEventHandler:
                 await sync_to_async(self._set_agent_wrapup)(agent_id, channel_id, call_log_id)
                 await sync_to_async(self._ws_call_ended)(agent_id, channel_id, call_log_id)
 
+    async def _find_replacement_agent_channel(self, pending, dead_channel_id):
+        """
+        If Asterisk rotates agent channel IDs mid-ring (seen on some setups),
+        find the replacement channel for the same endpoint and keep waiting.
+        """
+        agent_ext = pending.get('agent_ext')
+        if not agent_ext:
+            return None
+        ep = await sync_to_async(self.ari.get)(f'/endpoints/PJSIP/{agent_ext}')
+        if not isinstance(ep, dict):
+            return None
+        for cid in (ep.get('channel_ids') or []):
+            if cid and cid != dead_channel_id:
+                return cid
+        return None
+
     async def on_channel_state_change(self, event):
         channel_id = event.get('channel', {}).get('id', '')
         state      = event.get('channel', {}).get('state', '')
         logger.debug(f'ChannelStateChange: {channel_id} -> {state}')
+        self._trace('channel_state_change channel=%s state=%s', channel_id, state)
+
+        # Robust bridge trigger: if agent leg transitions to Up, complete bridge
+        # even if StasisStart happened earlier while still ringing.
+        if (state or '').lower() != 'up':
+            return
+
+        pending = self.pending_bridges.get(channel_id)
+        agent_id = None
+
+        if not pending:
+            # Reverse lookup of agent id by current channel map.
+            for aid, ch_id in self.agent_channels.items():
+                if ch_id == channel_id:
+                    agent_id = aid
+                    break
+            if agent_id is not None:
+                pending = self.pending_by_agent.get(agent_id)
+                if pending:
+                    stale_channel_id = pending.get('originated_agent_channel')
+                    if stale_channel_id and stale_channel_id != channel_id:
+                        self.pending_bridges.pop(stale_channel_id, None)
+                    pending['originated_agent_channel'] = channel_id
+                    self.pending_bridges[channel_id] = pending
+
+        if not pending:
+            self._trace('channel_state_change up without pending channel=%s', channel_id)
+            return
+
+        if agent_id is None:
+            agent_id = pending.get('agent_id')
+
+        self.pending_bridges.pop(channel_id, None)
+        self.pending_agent_channels.pop(channel_id, None)
+        if agent_id is not None:
+            self.pending_by_agent.pop(agent_id, None)
+        self._trace_pending('channel_state_change completing bridge')
+        await self._complete_bridge(channel_id, pending)
 
     async def on_hangup_request(self, event):
         channel_id = event.get('channel', {}).get('id', '')
@@ -613,12 +900,16 @@ class ARIEventHandler:
                 return None
 
             # Reserve immediately to avoid double-assignment races.
-            status.status = 'on_call'
+            # Use "ringing" (not "on_call") until bridge is actually created.
+            status.status = 'ringing'
             status.status_changed_at = timezone.now()
             status.active_campaign_id = int(campaign_id) if campaign_id else None
-            status.call_started_at = timezone.now()
+            status.call_started_at = None
             status.active_lead_id = None
             status.active_channel_id = None
+            status.wrapup_started_at = None
+            status.wrapup_call_log_id = None
+            status.active_call_log_id = None
             status.save(update_fields=[
                 'status',
                 'status_changed_at',
@@ -626,6 +917,9 @@ class ARIEventHandler:
                 'call_started_at',
                 'active_lead_id',
                 'active_channel_id',
+                'wrapup_started_at',
+                'wrapup_call_log_id',
+                'active_call_log_id',
                 'updated_at',
             ])
             return status.user
@@ -634,7 +928,9 @@ class ARIEventHandler:
         """Return a pre-reserved agent back to ready when bridge setup fails."""
         from agents.models import AgentStatus
         from core.ws_utils import send_to_agent
-        updated = AgentStatus.objects.filter(user_id=agent_id, status='on_call').update(
+        updated = AgentStatus.objects.filter(
+            user_id=agent_id, status__in=['ringing', 'on_call']
+        ).update(
             status='ready',
             status_changed_at=timezone.now(),
             active_channel_id=None,
@@ -671,32 +967,120 @@ class ARIEventHandler:
 
     def _set_agent_on_call(self, agent_id, channel_id, lead_id, campaign_id):
         from agents.models import AgentStatus
-        from core.ws_utils import send_to_agent
+        from core.ws_utils import send_to_agent, broadcast_supervisor
+
+        now = timezone.now()
         AgentStatus.objects.filter(user_id=agent_id).update(
             status='on_call',
+            status_changed_at=now,          # ← FIX: was missing
             active_channel_id=channel_id,
             active_lead_id=lead_id,
             active_campaign_id=campaign_id,
-            call_started_at=timezone.now(),
+            active_call_log_id=None,
+            wrapup_started_at=None,
+            wrapup_call_log_id=None,
+            call_started_at=now,
+            updated_at=now,
         )
-        send_to_agent(agent_id, {
-            'type': 'status_changed',
-            'status': 'on_call',
+        payload = {
+            'type':    'status_changed',
+            'status':  'on_call',
             'display': 'On Call',
-            'since': timezone.now().isoformat(),
+            'since':   now.isoformat(),     # ← FIX: was missing
+            'active_lead_id': lead_id,
+            'active_channel_id': channel_id,
+        }
+        send_to_agent(agent_id, payload)
+        broadcast_supervisor({
+            'type':      'agent_status_changed',
+            'agent_id':  agent_id,
+            'status':    'on_call',
+            'since':     now.isoformat(),
         })
+
+    def _set_agent_ringing(self, agent_id, customer_channel_id, lead_id, campaign_id):
+        from agents.models import AgentStatus
+        from core.ws_utils import send_to_agent, broadcast_supervisor
+
+        now = timezone.now()
+        AgentStatus.objects.filter(user_id=agent_id).update(
+            status='ringing',
+            status_changed_at=now,
+            active_channel_id=customer_channel_id,
+            active_lead_id=lead_id,
+            active_campaign_id=campaign_id,
+            active_call_log_id=None,
+            wrapup_started_at=None,
+            wrapup_call_log_id=None,
+            call_started_at=None,
+            updated_at=now,
+        )
+        payload = {
+            'type':    'status_changed',
+            'status':  'ringing',
+            'display': 'Ringing',
+            'since':   now.isoformat(),
+            'active_lead_id': lead_id,
+            'active_channel_id': customer_channel_id,
+        }
+        send_to_agent(agent_id, payload)
+        broadcast_supervisor({
+            'type':      'agent_status_changed',
+            'agent_id':  agent_id,
+            'status':    'ringing',
+            'since':     now.isoformat(),
+        })
+
+    def _bind_call_log_agent(self, channel_id, agent_id, campaign_id, lead_id):
+        from calls.models import CallLog
+
+        call_log, _ = CallLog.objects.get_or_create(
+            channel_id=channel_id,
+            defaults={
+                'lead_id':      lead_id or None,
+                'campaign_id':  campaign_id or None,
+                'status':       'answered',
+                'direction':    'outbound',
+                'started_at':   timezone.now(),
+            }
+        )
+        CallLog.objects.filter(id=call_log.id).update(
+            agent_id=agent_id,
+            campaign_id=campaign_id or call_log.campaign_id,
+            lead_id=lead_id or call_log.lead_id,
+            updated_at=timezone.now(),
+        )
 
     def _set_agent_wrapup(self, agent_id, channel_id, call_log_id=None):
         from agents.models import AgentStatus
-        from core.ws_utils import send_to_agent
+        from core.ws_utils import send_to_agent, broadcast_supervisor
+
+        now = timezone.now()
         AgentStatus.objects.filter(user_id=agent_id).update(
             status='wrapup',
-            wrapup_started_at=timezone.now(),
+            status_changed_at=now,          # ← FIX: was missing
+            wrapup_started_at=now,
             active_channel_id=None,
             wrapup_call_log_id=call_log_id,
             active_call_log_id=call_log_id,
+            updated_at=now,
         )
-        send_to_agent(agent_id, {'type': 'status_changed', 'status': 'wrapup', 'display': 'Wrap-up'})
+        payload = {
+            'type':    'status_changed',
+            'status':  'wrapup',
+            'display': 'Wrap-up',
+            'since':   now.isoformat(),     # ← FIX: was missing
+            'call_log_id': call_log_id,     # ← NEW: so dashboard knows which call
+            'active_lead_id': None,
+            'active_channel_id': None,
+        }
+        send_to_agent(agent_id, payload)
+        broadcast_supervisor({
+            'type':      'agent_status_changed',
+            'agent_id':  agent_id,
+            'status':    'wrapup',
+            'since':     now.isoformat(),
+        })
 
     def _update_call_log(self, channel_id, status, lead_id, campaign_id):
         from calls.models import CallLog
@@ -715,20 +1099,33 @@ class ARIEventHandler:
 
     def _finalise_call_log(self, channel_id, lead_id, duration_seconds, bridge_id):
         from calls.models import CallLog
+        from agents.models import AgentStatus
+        from django.db.models import F
+
         call_log, _ = CallLog.objects.get_or_create(
             channel_id=channel_id,
             defaults={
-                'lead_id': lead_id or None,
-                'direction': 'outbound',
+                'lead_id':    lead_id or None,
+                'direction':  'outbound',
                 'started_at': timezone.now(),
             }
         )
         CallLog.objects.filter(id=call_log.id).update(
             status='completed',
-            ended_at=timezone.now(),
+            bridge_id=bridge_id or call_log.bridge_id,
             duration=duration_seconds,
-            bridge_id=bridge_id or '',
+            answered_at=call_log.answered_at or timezone.now(),
+            ended_at=timezone.now(),
+            updated_at=timezone.now(),
         )
+
+        # Increment today's agent stats in DB (not virtual JS)
+        if call_log.agent_id:
+            AgentStatus.objects.filter(user_id=call_log.agent_id).update(
+                calls_today=F('calls_today') + 1,
+                talk_time_today=F('talk_time_today') + (duration_seconds or 0),
+            )
+
         return call_log.id
 
     def _mark_call_dropped(self, channel_id):
@@ -784,8 +1181,16 @@ class ARIEventHandler:
         send_to_agent(agent_id, call_incoming_event(call_id, lead_info, campaign_info))
 
     def _ws_call_connected(self, agent_id, call_id, bridge_id, lead_info):
-        from core.ws_utils import send_to_agent, call_connected_event
-        send_to_agent(agent_id, call_connected_event(call_id, lead_info, bridge_id))
+        from core.ws_utils import send_to_agent
+
+        now = timezone.now()
+        send_to_agent(agent_id, {
+            'type':      'call_connected',
+            'call_id':   call_id,
+            'bridge_id': bridge_id,
+            'lead':      lead_info,
+            'since':     now.isoformat(),   # ← FIX: dashboard was using new Date()
+        })
 
     def _ws_call_ended(self, agent_id, call_id, call_log_id=None):
         from core.ws_utils import send_to_agent, call_ended_event
@@ -799,7 +1204,8 @@ class ARIEventHandler:
 
 def _reset_stuck_on_call_agents(ari: 'ARIClient'):
     """
-    On ARI startup: find agents stuck in on_call with no live Asterisk channel
+    On ARI startup: find agents stuck in ringing/on_call with no live Asterisk
+    channel
     (left over from a previous process crash / restart) and recover them.
 
     Agents WITH a live channel are left alone — the event handler will clean up
@@ -812,19 +1218,21 @@ def _reset_stuck_on_call_agents(ari: 'ARIClient'):
     channels = ari.get('/channels') or []
     live_ids  = {ch.get('id') for ch in channels if isinstance(ch, dict)}
 
-    stuck = AgentStatus.objects.filter(status='on_call').select_related('user')
+    stuck = AgentStatus.objects.filter(
+        status__in=['ringing', 'on_call']
+    ).select_related('user')
     count = 0
     for st in stuck:
         if st.active_channel_id and st.active_channel_id in live_ids:
             continue  # genuinely on a live call — don't touch
 
         logger.warning(
-            'Startup cleanup: %s stuck on_call (channel=%s absent from ARI)',
-            st.user.username, st.active_channel_id,
+            'Startup cleanup: %s stuck %s (channel=%s absent from ARI)',
+            st.user.username, st.status, st.active_channel_id,
         )
         if st.active_call_log_id:
             # Call log exists → transition to wrapup so agent can dispose
-            AgentStatus.objects.filter(pk=st.pk, status='on_call').update(
+            AgentStatus.objects.filter(pk=st.pk).update(
                 status='wrapup',
                 wrapup_started_at=timezone.now(),
                 wrapup_call_log_id=st.active_call_log_id,
@@ -836,7 +1244,7 @@ def _reset_stuck_on_call_agents(ari: 'ARIClient'):
             })
         else:
             # No call log → just return to ready
-            AgentStatus.objects.filter(pk=st.pk, status='on_call').update(
+            AgentStatus.objects.filter(pk=st.pk).update(
                 status='ready',
                 status_changed_at=timezone.now(),
                 active_channel_id=None,

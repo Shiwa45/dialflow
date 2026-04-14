@@ -61,11 +61,11 @@ let agentTimers = {};
 const ws = new ReconnectingWS('/ws/supervisor/', {
   onmessage(data) {
     const t = data.type;
-    if      (t === 'snapshot')             applySnapshot(data);
-    else if (t === 'agent_status_changed') { updateAgent(data); renderAgents(); }
-    else if (t === 'campaign_stats')       updateCampaignStats(data);
-    else if (t === 'campaign_updated')     { mergeCampaign(data); renderCampaignControls(); }
-    else if (t === 'disposition_recorded') {} // stat update comes via campaign_stats
+    if      (t === 'snapshot')              applySnapshot(data);
+    else if (t === 'agent_status_changed'
+          || t === 'agent_status')          { updateAgent(data); renderAgents(); }
+    else if (t === 'campaign_stats')        updateCampaignStats(data);
+    else if (t === 'campaign_updated')      { mergeCampaign(data); renderCampaignControls(); }
 
     document.getElementById('liveTs').textContent = new Date().toLocaleTimeString();
   }
@@ -84,73 +84,115 @@ function applySnapshot(data) {
 
 function normaliseAgent(a) {
   return {
-    user_id:           a.user_id,
-    user__username:    a.user__username,
-    full_name:         (a.user__first_name && a.user__last_name)
-                         ? `${a.user__first_name} ${a.user__last_name}`.trim()
-                         : a.full_name || a.user__username,
-    status:            a.status,
-    status_display:    a.status_display || Supervisor.titleCase(a.status),
+    user_id:            a.user_id,
+    user__username:     a.user__username,
+    full_name:          (a.user__first_name && a.user__last_name)
+                          ? `${a.user__first_name} ${a.user__last_name}` : '',
+    status:             a.status,
+    status_display:     Supervisor.titleCase(a.status),
     active_campaign_id: a.active_campaign_id,
-    status_changed_at:  a.status_changed_at,
+    status_changed_at:  a.status_changed_at || a.since,   // ← FIX: accept both fields
+    call_started_at:    a.call_started_at,                 // ← NEW: for on_call timer
   };
 }
 
+// ── FIX: updateAgent uses `since` from WS event (DB timestamp) ──
 function updateAgent(data) {
-  agents[data.agent_id] = {
-    user_id:           data.agent_id,
-    user__username:    data.username,
-    full_name:         data.full_name || data.username,
-    status:            data.status,
-    status_display:    data.display,
-    active_campaign_id: data.campaign_id,
-    status_changed_at:  data.since,
-  };
+  const id = data.agent_id || data.user_id;
+  if (!id) return;
+
+  if (agents[id]) {
+    agents[id].status = data.status;
+    agents[id].status_display = data.display || Supervisor.titleCase(data.status);
+    // ── FIX: Use server-provided `since` timestamp, NOT new Date() ──
+    if (data.since) {
+      agents[id].status_changed_at = data.since;
+    }
+    if (data.call_started_at) {
+      agents[id].call_started_at = data.call_started_at;
+    }
+    if (data.active_campaign_id !== undefined) {
+      agents[id].active_campaign_id = data.active_campaign_id;
+    }
+  } else {
+    // New agent appeared
+    agents[id] = {
+      user_id:            id,
+      user__username:     data.username || `agent_${id}`,
+      full_name:          data.full_name || data.username || '',
+      status:             data.status,
+      status_display:     data.display || Supervisor.titleCase(data.status),
+      active_campaign_id: data.active_campaign_id || null,
+      status_changed_at:  data.since || new Date().toISOString(),
+      call_started_at:    data.call_started_at || null,
+    };
+  }
+
+  // Remove offline agents from display
+  if (data.status === 'offline') {
+    delete agents[id];
+  }
 }
 
 function mergeCampaign(data) {
-  campaigns[data.id] = { ...(campaigns[data.id] || {}), ...data };
+  const id = data.id || data.campaign_id;
+  if (id && campaigns[id]) {
+    Object.assign(campaigns[id], data);
+  }
 }
 
-// ── Agent rendering ───────────────────────────────────────────────────────────
+// ── Agent rendering ──────────────────────────────────────────────────────────
 function filterAgents() {
-  renderAgents();
+  const q = (document.getElementById('agentFilter')?.value || '').toLowerCase();
+  document.querySelectorAll('.agent-card').forEach(card => {
+    const name = card.querySelector('.agent-card-name')?.textContent?.toLowerCase() || '';
+    card.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
 }
 
 function renderAgents() {
-  const filter = document.getElementById('agentFilter').value.toLowerCase();
-  const list   = Object.values(agents).filter(a =>
-    !filter ||
-    a.user__username?.toLowerCase().includes(filter) ||
-    a.full_name?.toLowerCase().includes(filter)
-  );
-
-  const activeCount = list.filter(a => a.status !== 'offline').length;
-  document.getElementById('agentCountBadge').textContent = activeCount;
-
   const grid = document.getElementById('agentGrid');
+  if (!grid) return;
+
+  const list = Object.values(agents);
+  document.getElementById('agentCountBadge').textContent = list.length;
+
   if (!list.length) {
-    grid.innerHTML = '<div style="color:var(--color-text-3);font-size:13px;grid-column:1/-1;text-align:center;padding:32px">No active agents</div>';
+    grid.innerHTML = '<div style="color:var(--color-text-3);font-size:13px;grid-column:1/-1;text-align:center;padding:32px">No agents online</div>';
     return;
   }
 
-  const order = { on_call:0, wrapup:1, ready:2, break:3, training:4, offline:5 };
+  // Sort: on_call first, then ready, break, wrapup, training
+  const order = { on_call: 1, wrapup: 2, ready: 3, break: 4, training: 5 };
   list.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
 
   // Cancel existing timers
-  Object.values(agentTimers).forEach(f => f?.());
+  Object.values(agentTimers).forEach(f => { if (typeof f === 'function') f(); });
   agentTimers = {};
 
   grid.innerHTML = list.map(a => Supervisor.buildAgentCard(a, campaigns)).join('');
 
-  // Start per-agent status timers
+  // ── FIX: Start per-agent timers from DB-provided status_changed_at ──
   list.forEach(a => {
     const el = document.getElementById(`agttimer-${a.user_id}`);
     if (!el || !a.status_changed_at) return;
+
     const since = new Date(a.status_changed_at);
     agentTimers[a.user_id] = DF.ticker(() => {
       el.textContent = DF.formatDuration(DF.elapsed(since));
     });
+
+    // ── NEW: Separate call timer for on_call agents from call_started_at ──
+    if (a.status === 'on_call' && a.call_started_at) {
+      const callEl = document.getElementById(`agtcall-${a.user_id}`);
+      if (callEl) {
+        const callSince = new Date(a.call_started_at);
+        const callTimerKey = `call_${a.user_id}`;
+        agentTimers[callTimerKey] = DF.ticker(() => {
+          callEl.textContent = 'Call: ' + DF.formatDuration(DF.elapsed(callSince));
+        });
+      }
+    }
   });
 }
 
@@ -164,7 +206,6 @@ function updateCampaignStats(data) {
     stat_agents_active:  data.agents_active,
   });
 
-  // Live-patch the DOM cells without full re-render
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   const id = data.campaign_id;
   set(`cs-calls-${id}`, data.calls_today);
@@ -212,11 +253,5 @@ function renderCampaignControls() {
   }
   ctrl.innerHTML = list.map(c => Supervisor.buildCampaignControl(c)).join('');
 }
-
-// Expose actions for onclick handlers in Supervisor.buildCampaignControl / buildAgentCard
-window.Supervisor = { ...window.Supervisor,
-  campaignAction: Supervisor.campaignAction,
-  forceLogout:    Supervisor.forceLogout,
-};
 </script>
 {% endblock %}

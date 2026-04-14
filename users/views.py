@@ -139,7 +139,7 @@ def user_management(request):
     elif status == 'inactive':
         qs = qs.filter(is_active=False)
     elif status == 'online':
-        qs = qs.filter(agent_status__status__in=['ready', 'on_call', 'wrapup', 'break'])
+        qs = qs.filter(agent_status__status__in=['ready', 'ringing', 'on_call', 'wrapup', 'break'])
 
     page = Paginator(qs, 30).get_page(request.GET.get('page'))
 
@@ -150,7 +150,7 @@ def user_management(request):
         'active_users':     User.objects.filter(is_active=True).count(),
         'agent_count':      User.objects.filter(role='agent').count(),
         'supervisor_count': User.objects.filter(role='supervisor').count(),
-        'online_count':     AgentStatus.objects.filter(status__in=['ready', 'on_call', 'wrapup']).count(),
+        'online_count':     AgentStatus.objects.filter(status__in=['ready', 'ringing', 'on_call', 'wrapup']).count(),
     })
 
 
