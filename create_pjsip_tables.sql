@@ -9,12 +9,13 @@ CREATE TABLE IF NOT EXISTS ps_contacts (
     user_agent            VARCHAR(255),
     qualify_timeout       FLOAT,
     reg_server            VARCHAR(255),
-    authenticate_qualify  VARCHAR(3),
+    authenticate_qualify  VARCHAR(40),
     via_addr              VARCHAR(40),
     via_port              INTEGER,
     call_id               VARCHAR(255),
     endpoint              VARCHAR(255),
-    prune_on_boot         VARCHAR(3),
+    qualify_2xx_only      VARCHAR(40),
+    prune_on_boot         VARCHAR(40),
     PRIMARY KEY (id)
 );
 
